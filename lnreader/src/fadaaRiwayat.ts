@@ -1,0 +1,333 @@
+import { fetchApi } from '@libs/fetch';
+import { Plugin } from '@/types/plugin';
+import { load as loadCheerio, CheerioAPI } from 'cheerio';
+import { NovelStatus } from '@libs/novelStatus';
+
+/**
+ * فضاء الروايات (cenele.com)
+ *
+ * The chapter list is loaded the same way the site's "قائمة الفصول" panel does:
+ * the volume list first, then each volume in pages of 50 ("تحميل المزيد").
+ * Chapter text is wrapped in dir="rtl" so exported EPUBs read right-to-left.
+ */
+class FadaaRiwayatPlugin implements Plugin.PluginBase {
+  id = 'fadaaRiwayat';
+  name = 'فضاء الروايات';
+  icon = 'src/ar/fadaariwayat/icon.png';
+  site = 'https://cenele.com/';
+  version = '1.0.0';
+
+  imageRequestInit: Plugin.ImageRequestInit = {
+    headers: { Referer: 'https://cenele.com/' },
+  };
+
+  // Page requests go out with the app's default headers: the site's firewall
+  // rejects some mobile requests that carry a homepage Referer.
+  private async getHtml(url: string): Promise<string> {
+    const res = await fetchApi(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status} — افتح الموقع في WebView ثم حاول مرة أخرى`);
+    return await res.text();
+  }
+
+  private async getPage(url: string): Promise<CheerioAPI> {
+    return loadCheerio(await this.getHtml(url));
+  }
+
+  private absolute(href: string | undefined): string {
+    if (!href) return '';
+    try {
+      return new URL(href, this.site).toString();
+    } catch {
+      return '';
+    }
+  }
+
+  private toPath(href: string | undefined): string {
+    return this.absolute(href).replace(/^https?:\/\/[^/]+\//, '');
+  }
+
+  // ---------- lists ----------
+
+  private parseNovelList($: CheerioAPI): Plugin.NovelItem[] {
+    const novels: Plugin.NovelItem[] = [];
+    const seen: Record<string, boolean> = {};
+
+    // New theme cards, then classic Madara markup (still used by search).
+    let nodes = $('article.nhv-library-card');
+    if (!nodes.length) nodes = $('div.page-item-detail');
+    if (!nodes.length) nodes = $('div.c-tabs-item__content, div.page-listing-item');
+
+    nodes.each((_, el) => {
+      const node = $(el);
+      const a = node
+        .find('.nhv-library-card__title a, div.post-title a, h3 a, h4 a')
+        .first();
+      const name = a.text().trim();
+      const path = this.toPath(a.attr('href'));
+      if (!name || !path.startsWith('cont/') || seen[path]) return;
+      seen[path] = true;
+
+      const img = node
+        .find('.nhv-library-card__cover img, div.item-thumb img, div.tab-thumb img, img')
+        .first();
+      const cover = this.absolute(
+        img.attr('data-src') || img.attr('data-lazy-src') || img.attr('src'),
+      );
+      novels.push({ name, path, cover });
+    });
+    return novels;
+  }
+
+  async popularNovels(
+    pageNo: number,
+    { showLatestNovels }: Plugin.PopularNovelsOptions,
+  ): Promise<Plugin.NovelItem[]> {
+    const order = showLatestNovels ? 'latest' : 'views';
+    const page = pageNo > 1 ? `page/${pageNo}/` : '';
+    const $ = await this.getPage(`${this.site}cont/${page}?m_orderby=${order}`);
+    return this.parseNovelList($);
+  }
+
+  async searchNovels(searchTerm: string, pageNo: number): Promise<Plugin.NovelItem[]> {
+    const url =
+      `${this.site}?s=${encodeURIComponent(searchTerm.trim())}` +
+      `&post_type=wp-manga&paged=${pageNo}`;
+    const $ = await this.getPage(url);
+    return this.parseNovelList($);
+  }
+
+  // ---------- novel ----------
+
+  private toStatus(text: string): string {
+    if (/مستمر|جاري|مستمرة/.test(text)) return NovelStatus.Ongoing;
+    if (/مكتمل|منتهي/.test(text)) return NovelStatus.Completed;
+    if (/متوقف/.test(text)) return NovelStatus.OnHiatus;
+    if (/ملغ/.test(text)) return NovelStatus.Cancelled;
+    return NovelStatus.Unknown;
+  }
+
+  async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
+    const novelUrl = this.site + novelPath;
+    const html = await this.getHtml(novelUrl);
+    const $ = loadCheerio(html);
+
+    const novel: Plugin.SourceNovel = {
+      path: novelPath,
+      name:
+        $('h1.nhv-novel-title').first().text().trim() ||
+        $('div.post-title h1').first().text().trim() ||
+        'Untitled',
+    };
+
+    const img = $('div.nhv-novel-cover img, div.summary_image img').first();
+    novel.cover = this.absolute(
+      img.attr('data-src') || img.attr('data-lazy-src') || img.attr('src'),
+    );
+
+    const summary = $('div.nhv-novel-synopsis p')
+      .map((_, p) => $(p).text().trim())
+      .get()
+      .filter(Boolean)
+      .join('\n\n');
+    novel.summary = summary || $('div.nhv-novel-synopsis').text().trim();
+
+    // <div><span>label</span><strong>value</strong></div>
+    const meta: Record<string, string> = {};
+    $('div.nhv-novel-meta > div').each((_, el) => {
+      const label = $(el).find('span').first().text().trim();
+      const value = $(el).find('strong').first().text().trim();
+      if (label && value) meta[label] = value;
+    });
+    novel.author = meta['المؤلف'] || meta['الكاتب'] || '';
+    novel.artist = meta['المترجم'] || '';
+
+    novel.genres = $('div.nhv-novel-genres a')
+      .map((_, a) => $(a).text().trim())
+      .get()
+      .filter(Boolean)
+      .join(',');
+
+    novel.status = this.toStatus(
+      $('div.nhv-novel-status strong').first().text().trim() || meta['الحالة'] || '',
+    );
+
+    let chapters: Plugin.ChapterItem[] = [];
+    try {
+      chapters = await this.fetchAllChapters(html, novelUrl);
+    } catch {
+      chapters = [];
+    }
+    if (!chapters.length) {
+      // Fallback: the "آخر 8 فصول" block printed in the page (newest first).
+      chapters = this.parseChapterItems($, $('li.wp-manga-chapter')).reverse();
+    }
+    novel.chapters = chapters;
+    return novel;
+  }
+
+  private parseChapterItems($: CheerioAPI, items: ReturnType<CheerioAPI>): Plugin.ChapterItem[] {
+    const chapters: Plugin.ChapterItem[] = [];
+    items.each((_, el) => {
+      const li = $(el);
+      const a = li.find('a').first();
+      const path = this.toPath(a.attr('href'));
+      const full = a.text().replace(/\s+/g, ' ').trim();
+      if (!path || !full) return;
+
+      // "الفصل 1 الكابوس يبدأ" -> "الفصل 1 - الكابوس يبدأ"
+      const title = li.find('.nhv-chapter-name').text().replace(/\s+/g, ' ').trim();
+      let name = full;
+      if (title && full.endsWith(title) && full.length > title.length) {
+        name = `${full.slice(0, -title.length).trim()} - ${title}`;
+      }
+
+      const num = full.match(/الفصل\s*(\d+(?:\.\d+)?)/);
+      chapters.push({
+        name,
+        path,
+        chapterNumber: num ? parseFloat(num[1]) : undefined,
+        releaseTime: this.parseDate(li.find('.chapter-release-date').text().trim()),
+      });
+    });
+    return chapters;
+  }
+
+  // "يونيو 30, 2022" -> ISO date. Relative dates ("منذ يومين") are left empty.
+  private parseDate(text: string): string | null {
+    const months: Record<string, number> = {
+      'يناير': 0, 'فبراير': 1, 'مارس': 2, 'أبريل': 3, 'ابريل': 3, 'مايو': 4,
+      'يونيو': 5, 'يوليو': 6, 'أغسطس': 7, 'اغسطس': 7, 'سبتمبر': 8,
+      'أكتوبر': 9, 'اكتوبر': 9, 'نوفمبر': 10, 'ديسمبر': 11,
+    };
+    const m = text.match(/([؀-ۿ]+)\s+(\d{1,2}),?\s+(\d{4})/);
+    if (m && months[m[1]] !== undefined) {
+      return new Date(Date.UTC(+m[3], months[m[1]], +m[2])).toISOString();
+    }
+    return null;
+  }
+
+  // Same requests the site makes when you open "قائمة الفصول".
+  private async fetchAllChapters(pageHtml: string, novelUrl: string): Promise<Plugin.ChapterItem[]> {
+    const cfg = (pageHtml.match(/nhvNovelV2\s*=\s*(\{[^;]*\})/) || [])[1] || '';
+    const postId = (cfg.match(/"postId"\s*:\s*"?(\d+)/) || [])[1];
+    let nonce = (cfg.match(/"chaptersNonce"\s*:\s*"([^"]+)"/) || [])[1];
+    const ajaxUrl =
+      ((cfg.match(/"ajaxurl"\s*:\s*"([^"]+)"/) || [])[1] || '').replace(/\\\//g, '/') ||
+      `${this.site}wp-admin/admin-ajax.php`;
+    if (!postId || !nonce) return [];
+
+    const headers = {
+      'Origin': 'https://cenele.com',
+      'Referer': novelUrl,
+      'Accept': 'application/json, text/javascript, */*; q=0.01',
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      'X-Requested-With': 'XMLHttpRequest',
+    };
+    const encode = (obj: Record<string, string | number>) =>
+      Object.keys(obj)
+        .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(String(obj[k]))}`)
+        .join('&');
+
+    const post = async (params: Record<string, string | number>, retried = false): Promise<any> => {
+      const res = await fetchApi(ajaxUrl, {
+        method: 'POST',
+        headers,
+        body: encode({ ...params, nonce: nonce as string }),
+      });
+      if (res.status === 403 && !retried) {
+        // Nonce expired: refresh it like the site does, then retry once.
+        const fr = await fetchApi(ajaxUrl, {
+          method: 'POST',
+          headers,
+          body: encode({ action: 'nhv_refresh_front_nonces' }),
+        });
+        const fresh = JSON.parse((await fr.text()) || '{}');
+        if (fresh?.success && fresh.data?.chapters_nonce) nonce = fresh.data.chapters_nonce;
+        return post(params, true);
+      }
+      const data = JSON.parse((await res.text()) || '{}');
+      if (!data || !data.success) throw new Error('chapters_failed');
+      return data;
+    };
+
+    const base = {
+      action: 'nhv_manga_single_chapters_page',
+      manga_id: postId,
+      per_page: 50,
+      order: 'asc',
+    };
+
+    const meta = await post({ ...base, volume: -1, page: 1, meta_only: 1 });
+    const volumes: { num: number }[] = Array.isArray(meta.volumes) ? meta.volumes : [];
+    if (!volumes.length) return [];
+
+    const chapters: Plugin.ChapterItem[] = [];
+    const seen: Record<string, boolean> = {};
+    for (const vol of volumes) {
+      const volume = parseInt(String(vol.num || 0), 10);
+      let page = 1;
+      let more = true;
+      while (more && page <= 200) {
+        const data = await post({ ...base, volume, page });
+        const $ = loadCheerio(data.html || '');
+        const items = this.parseChapterItems($, $('li.wp-manga-chapter'));
+        for (const ch of items) {
+          if (seen[ch.path]) continue;
+          seen[ch.path] = true;
+          chapters.push(ch);
+        }
+        more = !!data.has_more && items.length > 0;
+        page++;
+      }
+    }
+
+    // "بدون مجلدات" mixes intro chapters (0.1, 0.2) with recent chapters not yet
+    // filed into a volume, so order by chapter number. Unnumbered chapters stay
+    // right after their neighbour in site order.
+    let prev = -1;
+    const keyed = chapters.map((ch, i) => {
+      const key = ch.chapterNumber !== undefined && !isNaN(ch.chapterNumber) ? ch.chapterNumber : prev + 0.0001;
+      prev = key;
+      return { ch, key, i };
+    });
+    keyed.sort((a, b) => a.key - b.key || a.i - b.i);
+    return keyed.map(k => k.ch);
+  }
+
+  // ---------- chapter ----------
+
+  async parseChapter(chapterPath: string): Promise<string> {
+    const $ = await this.getPage(this.site + chapterPath);
+    const title = $('h3.chapter-name').first().text().replace(/\s+/g, ' ').trim();
+    const reading = $('div.reading-content').first();
+
+    const escape = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    const paragraphs: string[] = [];
+    reading.find('p').each((_, el) => {
+      const p = $(el);
+      // Skip the store/app promo boxes; chapter paragraphs live in the main flow.
+      if (p.closest('aside, .nhv-reader-promo, script, style').length) return;
+      p.find('br').replaceWith('\n');
+      const text = p
+        .text()
+        .replace(/ /g, ' ')
+        .split('\n')
+        .map(line => line.replace(/\s+/g, ' ').trim())
+        .join('\n')
+        .trim();
+      if (text) paragraphs.push(`<p>${escape(text).replace(/\n/g, '<br>')}</p>`);
+    });
+
+    const heading = title ? `<h2>${escape(title)}</h2>\n` : '';
+    return (
+      '<div dir="rtl" lang="ar" style="direction: rtl; text-align: right;">\n' +
+      heading +
+      paragraphs.join('\n') +
+      '\n</div>'
+    );
+  }
+}
+
+export default new FadaaRiwayatPlugin();
