@@ -131,7 +131,7 @@ def safe_name(s):
 # ------------------------------------------------------------------- site ----
 
 class Site:
-    def __init__(self, delay=1.0):
+    def __init__(self, delay=3.0):
         self.delay = delay
         self.http = requests.Session()
         self.http.headers.update({"User-Agent": UA, "Accept-Language": "ar,en;q=0.8"})
@@ -698,7 +698,7 @@ def main():
     ap.add_argument("--send", action="store_true", help="أرسل الملفات للكيندل")
     ap.add_argument("--no-send", action="store_true", help="لا ترسل للكيندل")
     ap.add_argument("--out", help="مجلد الحفظ")
-    ap.add_argument("--delay", type=float, default=1.0, help="ثواني بين الطلبات")
+    ap.add_argument("--delay", type=float, default=3.0, help="ثواني بين الطلبات (الأبطأ أقل إزعاج للموقع)")
     ap.add_argument("-y", "--yes", action="store_true", help="بدون أسئلة (الإعدادات الافتراضية)")
     ap.add_argument("--setup-kindle", action="store_true", help="احفظ عنوان الكيندل")
     ap.add_argument("--version", action="version", version=f"fadaa {VERSION}")
