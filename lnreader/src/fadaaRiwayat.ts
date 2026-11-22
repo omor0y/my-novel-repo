@@ -15,7 +15,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   name = 'فضاء الروايات';
   icon = 'src/ar/fadaariwayat/icon.png';
   site = 'https://cenele.com/';
-  version = '1.0.1';
+  version = '1.0.2';
 
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: { Referer: 'https://cenele.com/' },
@@ -155,18 +155,36 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
       $('div.nhv-novel-status strong').first().text().trim() || meta['الحالة'] || '',
     );
 
-    let chapters: Plugin.ChapterItem[] = [];
-    try {
-      chapters = await this.fetchAllChapters(html, novelUrl);
-    } catch {
-      chapters = [];
+    // Full list from the "قائمة الفصول" panel. Whatever loads is kept and merged
+    // with the "آخر 8 فصول" block printed in the page.
+    const latest = this.parseChapterItems($, $('li.wp-manga-chapter'));
+    const result = await this.fetchAllChapters(html, novelUrl);
+    novel.chapters = this.sortChapters(result.chapters.concat(latest));
+
+    if (result.error) {
+      // Shown at the top of the description so the reason is visible on the device.
+      novel.summary =
+        `⚠️ قائمة الفصول ناقصة (${novel.chapters.length} فصل): ${result.error}\n\n` +
+        (novel.summary || '');
     }
-    if (!chapters.length) {
-      // Fallback: the "آخر 8 فصول" block printed in the page (newest first).
-      chapters = this.parseChapterItems($, $('li.wp-manga-chapter')).reverse();
-    }
-    novel.chapters = chapters;
     return novel;
+  }
+
+  // Dedupe by path and order by chapter number. "بدون مجلدات" mixes intro
+  // chapters (0.1, 0.2) with recent chapters not yet filed into a volume.
+  // Unnumbered chapters stay right after their neighbour in site order.
+  private sortChapters(list: Plugin.ChapterItem[]): Plugin.ChapterItem[] {
+    const seen: Record<string, boolean> = {};
+    const unique = list.filter(ch => (seen[ch.path] ? false : (seen[ch.path] = true)));
+    let prev = -1;
+    const keyed = unique.map((ch, i) => {
+      const key =
+        ch.chapterNumber !== undefined && !isNaN(ch.chapterNumber) ? ch.chapterNumber : prev + 0.0001;
+      prev = key;
+      return { ch, key, i };
+    });
+    keyed.sort((a, b) => a.key - b.key || a.i - b.i);
+    return keyed.map(k => k.ch);
   }
 
   private parseChapterItems($: CheerioAPI, items: ReturnType<CheerioAPI>): Plugin.ChapterItem[] {
@@ -210,16 +228,46 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
     return null;
   }
 
-  // Same requests the site makes when you open "قائمة الفصول".
-  private async fetchAllChapters(pageHtml: string, novelUrl: string): Promise<Plugin.ChapterItem[]> {
-    const cfg = (pageHtml.match(/nhvNovelV2\s*=\s*(\{[^;]*\})/) || [])[1] || '';
-    const postId = (cfg.match(/"postId"\s*:\s*"?(\d+)/) || [])[1];
-    let nonce = (cfg.match(/"chaptersNonce"\s*:\s*"([^"]+)"/) || [])[1];
-    const ajaxUrl =
-      ((cfg.match(/"ajaxurl"\s*:\s*"([^"]+)"/) || [])[1] || '').replace(/\\\//g, '/') ||
-      `${this.site}wp-admin/admin-ajax.php`;
-    if (!postId || !nonce) return [];
+  // Same requests the site makes when you open "قائمة الفصول": the volume list,
+  // then each volume in pages of 50 ("تحميل المزيد"). Never throws: returns the
+  // chapters it got plus a readable reason if something failed.
+  private async fetchAllChapters(
+    pageHtml: string,
+    novelUrl: string,
+  ): Promise<{ chapters: Plugin.ChapterItem[]; error?: string }> {
+    const chapters: Plugin.ChapterItem[] = [];
+    let step = 'قراءة إعدادات الصفحة';
+    try {
+      // Read the values from anywhere in the page, not only the nhvNovelV2 block.
+      const postId =
+        (pageHtml.match(/"postId"\s*:\s*"?(\d+)/) || [])[1] ||
+        (pageHtml.match(/\bpostid-(\d+)\b/) || [])[1];
+      let nonce = (pageHtml.match(/"chaptersNonce"\s*:\s*"([^"]+)"/) || [])[1];
+      const ajaxUrl =
+        ((pageHtml.match(/"ajaxurl"\s*:\s*"([^"]+)"/) || [])[1] || '').replace(/\\\//g, '/') ||
+        `${this.site}wp-admin/admin-ajax.php`;
+      if (!postId) return { chapters, error: 'ما لقيت رقم الرواية في الصفحة' };
 
+      const result = await this.loadVolumes(postId, nonce, ajaxUrl, novelUrl, chapters, s => (step = s));
+      return { chapters, error: result };
+    } catch (e: any) {
+      return { chapters, error: `${step}: ${e?.message || e}` };
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private async loadVolumes(
+    postId: string,
+    initialNonce: string | undefined,
+    ajaxUrl: string,
+    novelUrl: string,
+    chapters: Plugin.ChapterItem[],
+    setStep: (s: string) => void,
+  ): Promise<string | undefined> {
+    let nonce = initialNonce || '';
     const headers = {
       'User-Agent': this.userAgent,
       'Origin': 'https://cenele.com',
@@ -233,26 +281,41 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
         .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(String(obj[k]))}`)
         .join('&');
 
-    const post = async (params: Record<string, string | number>, retried = false): Promise<any> => {
-      const res = await fetchApi(ajaxUrl, {
-        method: 'POST',
-        headers,
-        body: encode({ ...params, nonce: nonce as string }),
-      });
-      if (res.status === 403 && !retried) {
-        // Nonce expired: refresh it like the site does, then retry once.
-        const fr = await fetchApi(ajaxUrl, {
-          method: 'POST',
-          headers,
-          body: encode({ action: 'nhv_refresh_front_nonces' }),
-        });
-        const fresh = JSON.parse((await fr.text()) || '{}');
-        if (fresh?.success && fresh.data?.chapters_nonce) nonce = fresh.data.chapters_nonce;
-        return post(params, true);
+    // One POST, decoded as JSON; failures carry the HTTP status and the start of
+    // the reply so the reason is readable on the device.
+    const postOnce = async (body: string): Promise<{ status: number; data?: any; text: string }> => {
+      const res = await fetchApi(ajaxUrl, { method: 'POST', headers, body });
+      const text = (await res.text()) || '';
+      try {
+        return { status: res.status, data: JSON.parse(text), text };
+      } catch {
+        return { status: res.status, text };
       }
-      const data = JSON.parse((await res.text()) || '{}');
-      if (!data || !data.success) throw new Error('chapters_failed');
-      return data;
+    };
+    const describe = (r: { status: number; text: string }) =>
+      `HTTP ${r.status} — ${r.text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80)}`;
+
+    const refreshNonce = async () => {
+      // The site's own way to get a fresh nonce (its script calls this on 403).
+      const r = await postOnce(encode({ action: 'nhv_refresh_front_nonces' }));
+      if (r.data?.success && r.data.data?.chapters_nonce) nonce = r.data.data.chapters_nonce;
+    };
+
+    // Up to 3 attempts per request, refreshing the nonce after a 403.
+    const post = async (params: Record<string, string | number>): Promise<any> => {
+      let last = { status: 0, text: '' };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) await this.sleep(1500 * attempt);
+        try {
+          const r = await postOnce(encode({ ...params, nonce }));
+          if (r.status === 200 && r.data?.success) return r.data;
+          last = r;
+          if (r.status === 403 || r.data?.success === false) await refreshNonce();
+        } catch (e: any) {
+          last = { status: 0, text: String(e?.message || e) };
+        }
+      }
+      throw new Error(describe(last));
     };
 
     const base = {
@@ -262,41 +325,31 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
       order: 'asc',
     };
 
-    const meta = await post({ ...base, volume: -1, page: 1, meta_only: 1 });
-    const volumes: { num: number }[] = Array.isArray(meta.volumes) ? meta.volumes : [];
-    if (!volumes.length) return [];
+    if (!nonce) {
+      setStep('جلب رمز الطلب');
+      await refreshNonce();
+    }
 
-    const chapters: Plugin.ChapterItem[] = [];
-    const seen: Record<string, boolean> = {};
+    setStep('قائمة المجلدات');
+    const meta = await post({ ...base, volume: -1, page: 1, meta_only: 1 });
+    const volumes: { num: number; label?: string }[] = Array.isArray(meta.volumes) ? meta.volumes : [];
+    if (!volumes.length) return 'الموقع رجّع قائمة مجلدات فاضية';
+
     for (const vol of volumes) {
       const volume = parseInt(String(vol.num || 0), 10);
       let page = 1;
       let more = true;
       while (more && page <= 200) {
+        setStep(`${vol.label || `المجلد ${volume}`}، الصفحة ${page}`);
         const data = await post({ ...base, volume, page });
         const $ = loadCheerio(data.html || '');
         const items = this.parseChapterItems($, $('li.wp-manga-chapter'));
-        for (const ch of items) {
-          if (seen[ch.path]) continue;
-          seen[ch.path] = true;
-          chapters.push(ch);
-        }
+        for (const ch of items) chapters.push(ch);
         more = !!data.has_more && items.length > 0;
         page++;
       }
     }
-
-    // "بدون مجلدات" mixes intro chapters (0.1, 0.2) with recent chapters not yet
-    // filed into a volume, so order by chapter number. Unnumbered chapters stay
-    // right after their neighbour in site order.
-    let prev = -1;
-    const keyed = chapters.map((ch, i) => {
-      const key = ch.chapterNumber !== undefined && !isNaN(ch.chapterNumber) ? ch.chapterNumber : prev + 0.0001;
-      prev = key;
-      return { ch, key, i };
-    });
-    keyed.sort((a, b) => a.key - b.key || a.i - b.i);
-    return keyed.map(k => k.ch);
+    return undefined;
   }
 
   // ---------- chapter ----------

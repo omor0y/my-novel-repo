@@ -46,15 +46,6 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
-    if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
-        if (ar || !(i in from)) {
-            if (!ar) ar = Array.prototype.slice.call(from, 0, i);
-            ar[i] = from[i];
-        }
-    }
-    return to.concat(ar || Array.prototype.slice.call(from));
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 var fetch_1 = require("@libs/fetch");
 var cheerio_1 = require("cheerio");
@@ -65,7 +56,7 @@ var FadaaRiwayatPlugin = (function () {
         this.name = 'فضاء الروايات';
         this.icon = 'src/ar/fadaariwayat/icon.png';
         this.site = 'https://cenele.com/';
-        this.version = '1.0.1';
+        this.version = '1.0.2';
         this.imageRequestInit = {
             headers: { Referer: 'https://cenele.com/' },
         };
@@ -186,14 +177,14 @@ var FadaaRiwayatPlugin = (function () {
     };
     FadaaRiwayatPlugin.prototype.parseNovel = function (novelPath) {
         return __awaiter(this, void 0, void 0, function () {
-            var novelUrl, html, $, novel, img, summary, meta, chapters, _a;
-            return __generator(this, function (_b) {
-                switch (_b.label) {
+            var novelUrl, html, $, novel, img, summary, meta, latest, result;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
                     case 0:
                         novelUrl = this.site + novelPath;
                         return [4, this.getHtml(novelUrl)];
                     case 1:
-                        html = _b.sent();
+                        html = _a.sent();
                         $ = (0, cheerio_1.load)(html);
                         novel = {
                             path: novelPath,
@@ -224,27 +215,32 @@ var FadaaRiwayatPlugin = (function () {
                             .filter(Boolean)
                             .join(',');
                         novel.status = this.toStatus($('div.nhv-novel-status strong').first().text().trim() || meta['الحالة'] || '');
-                        chapters = [];
-                        _b.label = 2;
-                    case 2:
-                        _b.trys.push([2, 4, , 5]);
+                        latest = this.parseChapterItems($, $('li.wp-manga-chapter'));
                         return [4, this.fetchAllChapters(html, novelUrl)];
-                    case 3:
-                        chapters = _b.sent();
-                        return [3, 5];
-                    case 4:
-                        _a = _b.sent();
-                        chapters = [];
-                        return [3, 5];
-                    case 5:
-                        if (!chapters.length) {
-                            chapters = this.parseChapterItems($, $('li.wp-manga-chapter')).reverse();
+                    case 2:
+                        result = _a.sent();
+                        novel.chapters = this.sortChapters(result.chapters.concat(latest));
+                        if (result.error) {
+                            novel.summary =
+                                "\u26A0\uFE0F \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0641\u0635\u0648\u0644 \u0646\u0627\u0642\u0635\u0629 (".concat(novel.chapters.length, " \u0641\u0635\u0644): ").concat(result.error, "\n\n") +
+                                    (novel.summary || '');
                         }
-                        novel.chapters = chapters;
                         return [2, novel];
                 }
             });
         });
+    };
+    FadaaRiwayatPlugin.prototype.sortChapters = function (list) {
+        var seen = {};
+        var unique = list.filter(function (ch) { return (seen[ch.path] ? false : (seen[ch.path] = true)); });
+        var prev = -1;
+        var keyed = unique.map(function (ch, i) {
+            var key = ch.chapterNumber !== undefined && !isNaN(ch.chapterNumber) ? ch.chapterNumber : prev + 0.0001;
+            prev = key;
+            return { ch: ch, key: key, i: i };
+        });
+        keyed.sort(function (a, b) { return a.key - b.key || a.i - b.i; });
+        return keyed.map(function (k) { return k.ch; });
     };
     FadaaRiwayatPlugin.prototype.parseChapterItems = function ($, items) {
         var _this = this;
@@ -285,18 +281,45 @@ var FadaaRiwayatPlugin = (function () {
     };
     FadaaRiwayatPlugin.prototype.fetchAllChapters = function (pageHtml, novelUrl) {
         return __awaiter(this, void 0, void 0, function () {
-            var cfg, postId, nonce, ajaxUrl, headers, encode, post, base, meta, volumes, chapters, seen, _i, volumes_1, vol, volume, page, more, data, $, items, _a, items_1, ch, prev, keyed;
+            var chapters, step, postId, nonce, ajaxUrl, result, e_1;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        chapters = [];
+                        step = 'قراءة إعدادات الصفحة';
+                        _a.label = 1;
+                    case 1:
+                        _a.trys.push([1, 3, , 4]);
+                        postId = (pageHtml.match(/"postId"\s*:\s*"?(\d+)/) || [])[1] ||
+                            (pageHtml.match(/\bpostid-(\d+)\b/) || [])[1];
+                        nonce = (pageHtml.match(/"chaptersNonce"\s*:\s*"([^"]+)"/) || [])[1];
+                        ajaxUrl = ((pageHtml.match(/"ajaxurl"\s*:\s*"([^"]+)"/) || [])[1] || '').replace(/\\\//g, '/') ||
+                            "".concat(this.site, "wp-admin/admin-ajax.php");
+                        if (!postId)
+                            return [2, { chapters: chapters, error: 'ما لقيت رقم الرواية في الصفحة' }];
+                        return [4, this.loadVolumes(postId, nonce, ajaxUrl, novelUrl, chapters, function (s) { return (step = s); })];
+                    case 2:
+                        result = _a.sent();
+                        return [2, { chapters: chapters, error: result }];
+                    case 3:
+                        e_1 = _a.sent();
+                        return [2, { chapters: chapters, error: "".concat(step, ": ").concat((e_1 === null || e_1 === void 0 ? void 0 : e_1.message) || e_1) }];
+                    case 4: return [2];
+                }
+            });
+        });
+    };
+    FadaaRiwayatPlugin.prototype.sleep = function (ms) {
+        return new Promise(function (resolve) { return setTimeout(resolve, ms); });
+    };
+    FadaaRiwayatPlugin.prototype.loadVolumes = function (postId, initialNonce, ajaxUrl, novelUrl, chapters, setStep) {
+        return __awaiter(this, void 0, void 0, function () {
+            var nonce, headers, encode, postOnce, describe, refreshNonce, post, base, meta, volumes, _i, volumes_1, vol, volume, page, more, data, $, items, _a, items_1, ch;
             var _this = this;
             return __generator(this, function (_b) {
                 switch (_b.label) {
                     case 0:
-                        cfg = (pageHtml.match(/nhvNovelV2\s*=\s*(\{[^;]*\})/) || [])[1] || '';
-                        postId = (cfg.match(/"postId"\s*:\s*"?(\d+)/) || [])[1];
-                        nonce = (cfg.match(/"chaptersNonce"\s*:\s*"([^"]+)"/) || [])[1];
-                        ajaxUrl = ((cfg.match(/"ajaxurl"\s*:\s*"([^"]+)"/) || [])[1] || '').replace(/\\\//g, '/') ||
-                            "".concat(this.site, "wp-admin/admin-ajax.php");
-                        if (!postId || !nonce)
-                            return [2, []];
+                        nonce = initialNonce || '';
                         headers = {
                             'User-Agent': this.userAgent,
                             'Origin': 'https://cenele.com',
@@ -310,103 +333,132 @@ var FadaaRiwayatPlugin = (function () {
                                 .map(function (k) { return "".concat(encodeURIComponent(k), "=").concat(encodeURIComponent(String(obj[k]))); })
                                 .join('&');
                         };
-                        post = function (params_1) {
-                            var args_1 = [];
-                            for (var _i = 1; _i < arguments.length; _i++) {
-                                args_1[_i - 1] = arguments[_i];
-                            }
-                            return __awaiter(_this, __spreadArray([params_1], args_1, true), void 0, function (params, retried) {
-                                var res, fr, fresh, _a, _b, data, _c, _d;
-                                var _e;
-                                if (retried === void 0) { retried = false; }
-                                return __generator(this, function (_f) {
-                                    switch (_f.label) {
-                                        case 0: return [4, (0, fetch_1.fetchApi)(ajaxUrl, {
-                                                method: 'POST',
-                                                headers: headers,
-                                                body: encode(__assign(__assign({}, params), { nonce: nonce })),
-                                            })];
-                                        case 1:
-                                            res = _f.sent();
-                                            if (!(res.status === 403 && !retried)) return [3, 4];
-                                            return [4, (0, fetch_1.fetchApi)(ajaxUrl, {
-                                                    method: 'POST',
-                                                    headers: headers,
-                                                    body: encode({ action: 'nhv_refresh_front_nonces' }),
-                                                })];
-                                        case 2:
-                                            fr = _f.sent();
-                                            _b = (_a = JSON).parse;
-                                            return [4, fr.text()];
-                                        case 3:
-                                            fresh = _b.apply(_a, [(_f.sent()) || '{}']);
-                                            if ((fresh === null || fresh === void 0 ? void 0 : fresh.success) && ((_e = fresh.data) === null || _e === void 0 ? void 0 : _e.chapters_nonce))
-                                                nonce = fresh.data.chapters_nonce;
-                                            return [2, post(params, true)];
-                                        case 4:
-                                            _d = (_c = JSON).parse;
-                                            return [4, res.text()];
-                                        case 5:
-                                            data = _d.apply(_c, [(_f.sent()) || '{}']);
-                                            if (!data || !data.success)
-                                                throw new Error('chapters_failed');
-                                            return [2, data];
-                                    }
-                                });
+                        postOnce = function (body) { return __awaiter(_this, void 0, void 0, function () {
+                            var res, text;
+                            return __generator(this, function (_a) {
+                                switch (_a.label) {
+                                    case 0: return [4, (0, fetch_1.fetchApi)(ajaxUrl, { method: 'POST', headers: headers, body: body })];
+                                    case 1:
+                                        res = _a.sent();
+                                        return [4, res.text()];
+                                    case 2:
+                                        text = (_a.sent()) || '';
+                                        try {
+                                            return [2, { status: res.status, data: JSON.parse(text), text: text }];
+                                        }
+                                        catch (_b) {
+                                            return [2, { status: res.status, text: text }];
+                                        }
+                                        return [2];
+                                }
                             });
+                        }); };
+                        describe = function (r) {
+                            return "HTTP ".concat(r.status, " \u2014 ").concat(r.text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80));
                         };
+                        refreshNonce = function () { return __awaiter(_this, void 0, void 0, function () {
+                            var r;
+                            var _a, _b;
+                            return __generator(this, function (_c) {
+                                switch (_c.label) {
+                                    case 0: return [4, postOnce(encode({ action: 'nhv_refresh_front_nonces' }))];
+                                    case 1:
+                                        r = _c.sent();
+                                        if (((_a = r.data) === null || _a === void 0 ? void 0 : _a.success) && ((_b = r.data.data) === null || _b === void 0 ? void 0 : _b.chapters_nonce))
+                                            nonce = r.data.data.chapters_nonce;
+                                        return [2];
+                                }
+                            });
+                        }); };
+                        post = function (params) { return __awaiter(_this, void 0, void 0, function () {
+                            var last, attempt, r, e_2;
+                            var _a, _b;
+                            return __generator(this, function (_c) {
+                                switch (_c.label) {
+                                    case 0:
+                                        last = { status: 0, text: '' };
+                                        attempt = 0;
+                                        _c.label = 1;
+                                    case 1:
+                                        if (!(attempt < 3)) return [3, 9];
+                                        if (!(attempt > 0)) return [3, 3];
+                                        return [4, this.sleep(1500 * attempt)];
+                                    case 2:
+                                        _c.sent();
+                                        _c.label = 3;
+                                    case 3:
+                                        _c.trys.push([3, 7, , 8]);
+                                        return [4, postOnce(encode(__assign(__assign({}, params), { nonce: nonce })))];
+                                    case 4:
+                                        r = _c.sent();
+                                        if (r.status === 200 && ((_a = r.data) === null || _a === void 0 ? void 0 : _a.success))
+                                            return [2, r.data];
+                                        last = r;
+                                        if (!(r.status === 403 || ((_b = r.data) === null || _b === void 0 ? void 0 : _b.success) === false)) return [3, 6];
+                                        return [4, refreshNonce()];
+                                    case 5:
+                                        _c.sent();
+                                        _c.label = 6;
+                                    case 6: return [3, 8];
+                                    case 7:
+                                        e_2 = _c.sent();
+                                        last = { status: 0, text: String((e_2 === null || e_2 === void 0 ? void 0 : e_2.message) || e_2) };
+                                        return [3, 8];
+                                    case 8:
+                                        attempt++;
+                                        return [3, 1];
+                                    case 9: throw new Error(describe(last));
+                                }
+                            });
+                        }); };
                         base = {
                             action: 'nhv_manga_single_chapters_page',
                             manga_id: postId,
                             per_page: 50,
                             order: 'asc',
                         };
-                        return [4, post(__assign(__assign({}, base), { volume: -1, page: 1, meta_only: 1 }))];
+                        if (!!nonce) return [3, 2];
+                        setStep('جلب رمز الطلب');
+                        return [4, refreshNonce()];
                     case 1:
+                        _b.sent();
+                        _b.label = 2;
+                    case 2:
+                        setStep('قائمة المجلدات');
+                        return [4, post(__assign(__assign({}, base), { volume: -1, page: 1, meta_only: 1 }))];
+                    case 3:
                         meta = _b.sent();
                         volumes = Array.isArray(meta.volumes) ? meta.volumes : [];
                         if (!volumes.length)
-                            return [2, []];
-                        chapters = [];
-                        seen = {};
+                            return [2, 'الموقع رجّع قائمة مجلدات فاضية'];
                         _i = 0, volumes_1 = volumes;
-                        _b.label = 2;
-                    case 2:
-                        if (!(_i < volumes_1.length)) return [3, 6];
+                        _b.label = 4;
+                    case 4:
+                        if (!(_i < volumes_1.length)) return [3, 8];
                         vol = volumes_1[_i];
                         volume = parseInt(String(vol.num || 0), 10);
                         page = 1;
                         more = true;
-                        _b.label = 3;
-                    case 3:
-                        if (!(more && page <= 200)) return [3, 5];
+                        _b.label = 5;
+                    case 5:
+                        if (!(more && page <= 200)) return [3, 7];
+                        setStep("".concat(vol.label || "\u0627\u0644\u0645\u062C\u0644\u062F ".concat(volume), "\u060C \u0627\u0644\u0635\u0641\u062D\u0629 ").concat(page));
                         return [4, post(__assign(__assign({}, base), { volume: volume, page: page }))];
-                    case 4:
+                    case 6:
                         data = _b.sent();
                         $ = (0, cheerio_1.load)(data.html || '');
                         items = this.parseChapterItems($, $('li.wp-manga-chapter'));
                         for (_a = 0, items_1 = items; _a < items_1.length; _a++) {
                             ch = items_1[_a];
-                            if (seen[ch.path])
-                                continue;
-                            seen[ch.path] = true;
                             chapters.push(ch);
                         }
                         more = !!data.has_more && items.length > 0;
                         page++;
-                        return [3, 3];
-                    case 5:
+                        return [3, 5];
+                    case 7:
                         _i++;
-                        return [3, 2];
-                    case 6:
-                        prev = -1;
-                        keyed = chapters.map(function (ch, i) {
-                            var key = ch.chapterNumber !== undefined && !isNaN(ch.chapterNumber) ? ch.chapterNumber : prev + 0.0001;
-                            prev = key;
-                            return { ch: ch, key: key, i: i };
-                        });
-                        keyed.sort(function (a, b) { return a.key - b.key || a.i - b.i; });
-                        return [2, keyed.map(function (k) { return k.ch; })];
+                        return [3, 4];
+                    case 8: return [2, undefined];
                 }
             });
         });
