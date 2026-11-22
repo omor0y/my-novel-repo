@@ -15,7 +15,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   name = 'فضاء الروايات';
   icon = 'src/ar/fadaariwayat/icon.png';
   site = 'https://cenele.com/';
-  version = '1.0.3';
+  version = '1.0.4';
 
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: { Referer: 'https://cenele.com/' },
@@ -360,6 +360,11 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
 
   async parseChapter(chapterPath: string): Promise<string> {
     const $ = await this.getPage(this.site + chapterPath);
+    if ($('.nhv-ts-gate').length) {
+      // The site sent its "not a robot" check instead of the chapter. Fail the
+      // download (so no empty chapter is saved); this source doesn't get around it.
+      throw new Error('الموقع طلب تحقق «لست روبوت» بدل الفصل');
+    }
     const title = $('h3.chapter-name').first().text().replace(/\s+/g, ' ').trim();
     const reading = $('div.reading-content').first();
 
