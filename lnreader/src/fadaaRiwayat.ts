@@ -15,7 +15,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   name = 'فضاء الروايات';
   icon = 'src/ar/fadaariwayat/icon.png';
   site = 'https://cenele.com/';
-  version = '1.0.4';
+  version = '1.0.5';
 
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: { Referer: 'https://cenele.com/' },
@@ -392,6 +392,12 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
         }
       }
     });
+
+    if (!paragraphs.length) {
+      // No chapter text in the reply (error page, interrupted load, ...). Fail
+      // the download so LNReader doesn't save an empty chapter; a retry usually works.
+      throw new Error('ما وصل نص الفصل من الموقع، حمّله مرة ثانية');
+    }
 
     const heading = title
       ? `<h2 style="margin: 0 0 1.2em 0;">${escape(title)}</h2>\n`
