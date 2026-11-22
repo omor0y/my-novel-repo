@@ -15,7 +15,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   name = 'فضاء الروايات';
   icon = 'src/ar/fadaariwayat/icon.png';
   site = 'https://cenele.com/';
-  version = '1.0.2';
+  version = '1.0.3';
 
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: { Referer: 'https://cenele.com/' },
@@ -354,6 +354,10 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
 
   // ---------- chapter ----------
 
+  // Inline so it travels with the chapter into exported EPUBs: a blank-line gap
+  // after every paragraph, no first-line indent.
+  private paragraphStyle = 'margin: 0 0 0.9em 0; text-indent: 0;';
+
   async parseChapter(chapterPath: string): Promise<string> {
     const $ = await this.getPage(this.site + chapterPath);
     const title = $('h3.chapter-name').first().text().replace(/\s+/g, ' ').trim();
@@ -375,12 +379,20 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
         .map(line => line.replace(/\s+/g, ' ').trim())
         .join('\n')
         .trim();
-      if (text) paragraphs.push(`<p>${escape(text).replace(/\n/g, '<br>')}</p>`);
+      if (text) {
+        // Lines split by <br> become their own paragraphs, so every paragraph
+        // gets the same spacing.
+        for (const line of text.split('\n')) {
+          if (line.trim()) paragraphs.push(`<p style="${this.paragraphStyle}">${escape(line.trim())}</p>`);
+        }
+      }
     });
 
-    const heading = title ? `<h2>${escape(title)}</h2>\n` : '';
+    const heading = title
+      ? `<h2 style="margin: 0 0 1.2em 0;">${escape(title)}</h2>\n`
+      : '';
     return (
-      '<div dir="rtl" lang="ar" style="direction: rtl; text-align: right;">\n' +
+      '<div dir="rtl" lang="ar" style="direction: rtl;">\n' +
       heading +
       paragraphs.join('\n') +
       '\n</div>'

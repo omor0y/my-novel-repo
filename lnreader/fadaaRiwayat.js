@@ -56,11 +56,12 @@ var FadaaRiwayatPlugin = (function () {
         this.name = 'فضاء الروايات';
         this.icon = 'src/ar/fadaariwayat/icon.png';
         this.site = 'https://cenele.com/';
-        this.version = '1.0.2';
+        this.version = '1.0.3';
         this.imageRequestInit = {
             headers: { Referer: 'https://cenele.com/' },
         };
         this.userAgent = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
+        this.paragraphStyle = 'margin: 0 0 0.9em 0; text-indent: 0;';
     }
     FadaaRiwayatPlugin.prototype.getHtml = function (url) {
         return __awaiter(this, void 0, void 0, function () {
@@ -466,6 +467,7 @@ var FadaaRiwayatPlugin = (function () {
     FadaaRiwayatPlugin.prototype.parseChapter = function (chapterPath) {
         return __awaiter(this, void 0, void 0, function () {
             var $, title, reading, escape, paragraphs, heading;
+            var _this = this;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0: return [4, this.getPage(this.site + chapterPath)];
@@ -489,11 +491,18 @@ var FadaaRiwayatPlugin = (function () {
                                 .map(function (line) { return line.replace(/\s+/g, ' ').trim(); })
                                 .join('\n')
                                 .trim();
-                            if (text)
-                                paragraphs.push("<p>".concat(escape(text).replace(/\n/g, '<br>'), "</p>"));
+                            if (text) {
+                                for (var _i = 0, _a = text.split('\n'); _i < _a.length; _i++) {
+                                    var line = _a[_i];
+                                    if (line.trim())
+                                        paragraphs.push("<p style=\"".concat(_this.paragraphStyle, "\">").concat(escape(line.trim()), "</p>"));
+                                }
+                            }
                         });
-                        heading = title ? "<h2>".concat(escape(title), "</h2>\n") : '';
-                        return [2, ('<div dir="rtl" lang="ar" style="direction: rtl; text-align: right;">\n' +
+                        heading = title
+                            ? "<h2 style=\"margin: 0 0 1.2em 0;\">".concat(escape(title), "</h2>\n")
+                            : '';
+                        return [2, ('<div dir="rtl" lang="ar" style="direction: rtl;">\n' +
                                 heading +
                                 paragraphs.join('\n') +
                                 '\n</div>')];
