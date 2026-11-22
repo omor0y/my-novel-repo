@@ -56,7 +56,7 @@ var FadaaRiwayatPlugin = (function () {
         this.name = 'فضاء الروايات';
         this.icon = 'src/ar/fadaariwayat/icon.png';
         this.site = 'https://cenele.com/';
-        this.version = '1.0.4';
+        this.version = '1.0.5';
         this.imageRequestInit = {
             headers: { Referer: 'https://cenele.com/' },
         };
@@ -502,6 +502,9 @@ var FadaaRiwayatPlugin = (function () {
                                 }
                             }
                         });
+                        if (!paragraphs.length) {
+                            throw new Error('ما وصل نص الفصل من الموقع، حمّله مرة ثانية');
+                        }
                         heading = title
                             ? "<h2 style=\"margin: 0 0 1.2em 0;\">".concat(escape(title), "</h2>\n")
                             : '';
