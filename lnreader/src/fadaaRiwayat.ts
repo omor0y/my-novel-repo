@@ -15,17 +15,21 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   name = 'فضاء الروايات';
   icon = 'src/ar/fadaariwayat/icon.png';
   site = 'https://cenele.com/';
-  version = '1.0.0';
+  version = '1.0.1';
 
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: { Referer: 'https://cenele.com/' },
   };
 
-  // Page requests go out with the app's default headers: the site's firewall
-  // rejects some mobile requests that carry a homepage Referer.
+  // The site answers 403 to Android WebView user agents (LNReader's default),
+  // so requests identify as mobile Chrome. Page requests carry no Referer:
+  // the firewall also rejects mobile requests with a homepage Referer.
+  private userAgent =
+    'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
+
   private async getHtml(url: string): Promise<string> {
-    const res = await fetchApi(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status} — افتح الموقع في WebView ثم حاول مرة أخرى`);
+    const res = await fetchApi(url, { headers: { 'User-Agent': this.userAgent } });
+    if (!res.ok) throw new Error(`الموقع رفض الطلب (HTTP ${res.status})`);
     return await res.text();
   }
 
@@ -217,6 +221,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
     if (!postId || !nonce) return [];
 
     const headers = {
+      'User-Agent': this.userAgent,
       'Origin': 'https://cenele.com',
       'Referer': novelUrl,
       'Accept': 'application/json, text/javascript, */*; q=0.01',
