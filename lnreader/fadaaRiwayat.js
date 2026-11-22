@@ -56,7 +56,7 @@ var FadaaRiwayatPlugin = (function () {
         this.name = 'فضاء الروايات';
         this.icon = 'src/ar/fadaariwayat/icon.png';
         this.site = 'https://cenele.com/';
-        this.version = '1.0.3';
+        this.version = '1.0.4';
         this.imageRequestInit = {
             headers: { Referer: 'https://cenele.com/' },
         };
@@ -473,6 +473,9 @@ var FadaaRiwayatPlugin = (function () {
                     case 0: return [4, this.getPage(this.site + chapterPath)];
                     case 1:
                         $ = _a.sent();
+                        if ($('.nhv-ts-gate').length) {
+                            throw new Error('الموقع طلب تحقق «لست روبوت» بدل الفصل');
+                        }
                         title = $('h3.chapter-name').first().text().replace(/\s+/g, ' ').trim();
                         reading = $('div.reading-content').first();
                         escape = function (s) {
