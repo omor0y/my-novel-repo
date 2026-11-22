@@ -65,21 +65,22 @@ var FadaaRiwayatPlugin = (function () {
         this.name = 'فضاء الروايات';
         this.icon = 'src/ar/fadaariwayat/icon.png';
         this.site = 'https://cenele.com/';
-        this.version = '1.0.0';
+        this.version = '1.0.1';
         this.imageRequestInit = {
             headers: { Referer: 'https://cenele.com/' },
         };
+        this.userAgent = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
     }
     FadaaRiwayatPlugin.prototype.getHtml = function (url) {
         return __awaiter(this, void 0, void 0, function () {
             var res;
             return __generator(this, function (_a) {
                 switch (_a.label) {
-                    case 0: return [4, (0, fetch_1.fetchApi)(url)];
+                    case 0: return [4, (0, fetch_1.fetchApi)(url, { headers: { 'User-Agent': this.userAgent } })];
                     case 1:
                         res = _a.sent();
                         if (!res.ok)
-                            throw new Error("HTTP ".concat(res.status, " \u2014 \u0627\u0641\u062A\u062D \u0627\u0644\u0645\u0648\u0642\u0639 \u0641\u064A WebView \u062B\u0645 \u062D\u0627\u0648\u0644 \u0645\u0631\u0629 \u0623\u062E\u0631\u0649"));
+                            throw new Error("\u0627\u0644\u0645\u0648\u0642\u0639 \u0631\u0641\u0636 \u0627\u0644\u0637\u0644\u0628 (HTTP ".concat(res.status, ")"));
                         return [4, res.text()];
                     case 2: return [2, _a.sent()];
                 }
@@ -297,6 +298,7 @@ var FadaaRiwayatPlugin = (function () {
                         if (!postId || !nonce)
                             return [2, []];
                         headers = {
+                            'User-Agent': this.userAgent,
                             'Origin': 'https://cenele.com',
                             'Referer': novelUrl,
                             'Accept': 'application/json, text/javascript, */*; q=0.01',
