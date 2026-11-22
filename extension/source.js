@@ -6,7 +6,7 @@ const mangayomiSources = [{
   "iconUrl": "https://www.google.com/s2/favicons?sz=256&domain=cenele.com",
   "typeSource": "single",
   "itemType": 2,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "dateFormat": "",
   "dateFormatLocale": "",
   "pkgPath": "novel/src/ar/riwyat-novel.js",
@@ -283,40 +283,152 @@ class DefaultExtension extends MProvider {
         .filter(Boolean);
     }
 
-    // Chapters (direct, fallback ajax)
-    let chapterDoc = doc;
-    let chapterEls = chapterDoc.select("li.wp-manga-chapter");
-
-    if (!chapterEls.length) {
-      try {
-        const chapterRes = await client.post(`${url}ajax/chapters/`, {
-          Origin: this.source.baseUrl,
-          Referer: url,
-        });
-        chapterDoc = new Document(chapterRes.body);
-        chapterEls = chapterDoc.select("li.wp-manga-chapter");
-      } catch (_) {}
+    // Chapters: full list from the site's "قائمة الفصول" panel (volumes + load more).
+    // Falls back to the "آخر 8 فصول" block printed in the page.
+    let chapters = [];
+    try {
+      chapters = await this.fetchAllChapters(res.body, url);
+    } catch (_) {
+      chapters = [];
     }
-
-    const chapters = [];
-    for (const el of chapterEls) {
-      const a = el.selectFirst("a");
-      let chName = (a?.text ?? "").trim();
-      chName = chName.replace(/^[\"\x27“”«»]+|[\"\x27“”«»]+$/g, "").trim();
-
-      const chUrl = this._getHref(a);
-      if (!chName || !chUrl) continue;
-
-      chapters.push({
-        name: chName,
-        url: chUrl,
-        // Mangayomi يحاول تحويله لرقم، لذلك نضع رقم صالح دائماً
-        dateUpload: String(Date.now()),
-        scanlator: "",
-      });
+    if (!chapters.length) {
+      chapters = this.parseChapterItems(doc.select("li.wp-manga-chapter"));
     }
 
     return { name, imageUrl, description, genre, author, artist, status, chapters };
+  }
+
+  // Turns <li class="wp-manga-chapter"> items into Mangayomi chapters.
+  parseChapterItems(chapterEls) {
+    const chapters = [];
+    for (const el of chapterEls) {
+      const a = el.selectFirst("a");
+      const chUrl = this._getHref(a);
+      let full = (a?.text ?? "").replace(/\s+/g, " ").trim();
+      full = full.replace(/^[\"\x27“”«»]+|[\"\x27“”«»]+$/g, "").trim();
+      if (!full || !chUrl) continue;
+
+      // "الفصل 1 الكابوس يبدأ" -> "الفصل 1 - الكابوس يبدأ"
+      const title = (el.selectFirst(".nhv-chapter-name")?.text ?? "").replace(/\s+/g, " ").trim();
+      let chName = full;
+      if (title && full.endsWith(title) && full.length > title.length) {
+        chName = `${full.slice(0, -title.length).trim()} - ${title}`;
+      }
+
+      const dateText = el.selectFirst(".chapter-release-date")?.text?.trim() || "";
+      chapters.push({
+        name: chName,
+        url: chUrl,
+        // Mangayomi expects a numeric string
+        dateUpload: String(this.parseChapterDate(dateText)),
+        scanlator: "",
+      });
+    }
+    return chapters;
+  }
+
+  // "يونيو 30, 2022" -> timestamp; relative dates ("منذ يومين") -> now.
+  parseChapterDate(text) {
+    const months = {
+      "يناير": 0, "فبراير": 1, "مارس": 2, "أبريل": 3, "ابريل": 3, "مايو": 4, "يونيو": 5,
+      "يوليو": 6, "أغسطس": 7, "اغسطس": 7, "سبتمبر": 8, "أكتوبر": 9, "اكتوبر": 9,
+      "نوفمبر": 10, "ديسمبر": 11,
+    };
+    const m = (text || "").match(/([؀-ۿ]+)\s+(\d{1,2}),?\s+(\d{4})/);
+    if (m && months[m[1]] !== undefined) {
+      const t = Date.UTC(parseInt(m[3], 10), months[m[1]], parseInt(m[2], 10));
+      if (!isNaN(t)) return t;
+    }
+    return Date.now();
+  }
+
+  // Same requests the site makes when you open "قائمة الفصول":
+  // 1) volume list (meta_only), 2) each volume in pages of 50 ("تحميل المزيد").
+  async fetchAllChapters(pageHtml, novelUrl) {
+    const cfg = (pageHtml.match(/nhvNovelV2\s*=\s*(\{[^;]*\})/) || [])[1] || "";
+    const postId = (cfg.match(/"postId"\s*:\s*"?(\d+)/) || [])[1];
+    let nonce = (cfg.match(/"chaptersNonce"\s*:\s*"([^"]+)"/) || [])[1];
+    const ajaxUrl =
+      ((cfg.match(/"ajaxurl"\s*:\s*"([^"]+)"/) || [])[1] || "").replace(/\\\//g, "/") ||
+      `${this.source.baseUrl}/wp-admin/admin-ajax.php`;
+    if (!postId || !nonce) return [];
+
+    const client = new Client();
+    const headers = {
+      ...this.headers,
+      Referer: novelUrl,
+      Accept: "application/json, text/javascript, */*; q=0.01",
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "X-Requested-With": "XMLHttpRequest",
+    };
+    const encode = (obj) =>
+      Object.keys(obj)
+        .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(String(obj[k]))}`)
+        .join("&");
+
+    const post = async (params, retried) => {
+      const r = await client.post(ajaxUrl, headers, encode({ ...params, nonce }));
+      if (r.statusCode === 403 && !retried) {
+        // Nonce expired: refresh it like the site does, then retry once.
+        const fr = await client.post(ajaxUrl, headers, encode({ action: "nhv_refresh_front_nonces" }));
+        const fresh = JSON.parse(fr.body || "{}");
+        if (fresh?.success && fresh.data?.chapters_nonce) nonce = fresh.data.chapters_nonce;
+        return post(params, true);
+      }
+      const data = JSON.parse(r.body || "{}");
+      if (!data || !data.success) throw new Error("chapters_failed");
+      return data;
+    };
+
+    const base = {
+      action: "nhv_manga_single_chapters_page",
+      manga_id: postId,
+      per_page: 50,
+      order: "asc",
+    };
+
+    const meta = await post({ ...base, volume: -1, page: 1, meta_only: 1 });
+    const volumes = Array.isArray(meta.volumes) ? meta.volumes : [];
+    if (!volumes.length) return [];
+
+    const chapters = [];
+    const seen = {};
+    for (const vol of volumes) {
+      const volNum = parseInt(vol.num || 0, 10);
+      let page = 1;
+      let more = true;
+      while (more && page <= 200) {
+        const data = await post({ ...base, volume: volNum, page });
+        const items = this.parseChapterItems(new Document(data.html || "").select("li.wp-manga-chapter"));
+        for (const ch of items) {
+          if (seen[ch.url]) continue;
+          seen[ch.url] = true;
+          chapters.push(ch);
+        }
+        more = !!data.has_more && items.length > 0;
+        page++;
+      }
+    }
+
+    // "بدون مجلدات" mixes intro chapters (0.1, 0.2) with recent chapters that were
+    // not filed into a volume yet, so order everything by chapter number.
+    // Chapters without a number stay right after their neighbour in site order.
+    let prevKey = -1;
+    const keyed = chapters.map((ch, i) => {
+      const m =
+        ch.name.match(/الفصل\s*(\d+(?:\.\d+)?)/) ||
+        decodeURIComponent(ch.url).match(/الفصل-(\d+)(?:-(\d+))?\/?$/);
+      let key;
+      if (m && m[0].startsWith("الفصل-")) key = parseFloat(m[2] ? `${m[1]}.${m[2]}` : m[1]);
+      else if (m) key = parseFloat(m[1]);
+      if (key === undefined || isNaN(key)) key = prevKey + 0.0001;
+      prevKey = key;
+      return { ch, key, i };
+    });
+    keyed.sort((a, b) => a.key - b.key || a.i - b.i);
+
+    // Mangayomi lists newest first.
+    return keyed.map((k) => k.ch).reverse();
   }
 
   // ---------- chapter content ----------
