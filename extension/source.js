@@ -1,12 +1,12 @@
 const mangayomiSources = [{
-  "name": "Riwyat Novel",
+  "name": "فضاء الروايات",
   "lang": "ar",
   "baseUrl": "https://cenele.com",
   "apiUrl": "",
   "iconUrl": "https://www.google.com/s2/favicons?sz=256&domain=cenele.com",
   "typeSource": "single",
   "itemType": 2,
-  "version": "1.0.17",
+  "version": "1.1.0",
   "dateFormat": "",
   "dateFormatLocale": "",
   "pkgPath": "novel/src/ar/riwyat-novel.js",
@@ -24,8 +24,8 @@ class DefaultExtension extends MProvider {
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
   };
 
-  // "مغامرة"
-  browsePath = "/cont-genre/%D9%85%D8%BA%D8%A7%D9%85%D8%B1%D8%A9/";
+  // All novels archive (sorted with ?m_orderby=views | latest | rating | alphabet)
+  browsePath = "/cont/";
 
   getHeaders(url) {
     return this.headers;
@@ -91,15 +91,20 @@ class DefaultExtension extends MProvider {
   parseBrowse(res) {
     const doc = new Document(res.body);
 
-    let nodes = doc.select("div.page-item-detail");
+    // New site theme (2026): <article class="nhv-library-card">
+    let nodes = doc.select("article.nhv-library-card");
+    if (!nodes.length) nodes = doc.select("div.page-item-detail");
     if (!nodes.length) {
+      // Search results still use the classic Madara markup.
       nodes = doc.select("div.c-tabs-item__content, div.page-listing-item");
     }
 
     const list = [];
+    const seen = {};
 
     for (const node of nodes) {
       const a =
+        node.selectFirst(".nhv-library-card__title a") ||
         node.selectFirst("div.post-title a") ||
         node.selectFirst("h3 a") ||
         node.selectFirst("h4 a") ||
@@ -109,8 +114,11 @@ class DefaultExtension extends MProvider {
       const link = this._getHref(a);
 
       if (!name || !link || !link.includes("/cont/")) continue;
+      if (seen[link]) continue;
+      seen[link] = true;
 
       const imageUrl =
+        this._getSrc(node.selectFirst(".nhv-library-card__cover img")) ||
         this._getSrc(node.selectFirst("div.item-thumb img")) ||
         this._getSrc(node.selectFirst("div.item-thumb a img")) ||
         this._getSrc(node.selectFirst("div.tab-thumb img")) ||
@@ -127,15 +135,19 @@ class DefaultExtension extends MProvider {
     return { list, hasNextPage };
   }
 
-  async getPopular(page) {
+  async browse(page, orderBy) {
     const suffix = page > 1 ? `page/${page}/` : "";
-    const url = `${this.source.baseUrl}${this.browsePath}${suffix}`;
+    const url = `${this.source.baseUrl}${this.browsePath}${suffix}?m_orderby=${orderBy}`;
     const res = await new Client().get(url, this.headers);
     return this.parseBrowse(res);
   }
 
+  async getPopular(page) {
+    return this.browse(page, "views");
+  }
+
   async getLatestUpdates(page) {
-    return this.getPopular(page);
+    return this.browse(page, "latest");
   }
 
   // ---------- search ----------
@@ -203,10 +215,22 @@ class DefaultExtension extends MProvider {
     const res = await client.get(url, this.headers);
     const doc = new Document(res.body);
 
-    const name = doc.selectFirst("div.post-title h1")?.text?.trim() || "";
-    const imageUrl = this._getSrc(doc.selectFirst("div.summary_image img"));
+    const name =
+      doc.selectFirst("h1.nhv-novel-title")?.text?.trim() ||
+      doc.selectFirst("div.post-title h1")?.text?.trim() ||
+      "";
+    const imageUrl =
+      this._getSrc(doc.selectFirst("div.nhv-novel-cover img")) ||
+      this._getSrc(doc.selectFirst("div.summary_image img"));
 
     const description =
+      doc
+        .select("div.nhv-novel-synopsis p")
+        .map((el) => el.text.trim())
+        .filter(Boolean)
+        .join("\n")
+        .trim() ||
+      doc.selectFirst("div.nhv-novel-synopsis")?.text?.trim() ||
       doc
         .select("div.summary__content p")
         .map((el) => el.text.trim())
@@ -216,7 +240,13 @@ class DefaultExtension extends MProvider {
       doc.selectFirst("div.description-summary")?.text?.trim() ||
       "";
 
+    // Label/value pairs: new theme uses <div><span>label</span><strong>value</strong></div>
     const extra = {};
+    for (const b of doc.select("div.nhv-novel-meta > div")) {
+      const label = b.selectFirst("span")?.text?.trim();
+      const value = b.selectFirst("strong")?.text?.trim();
+      if (label && value) extra[label] = value;
+    }
     for (const b of doc.select("div.post-content_item")) {
       const label = b.selectFirst("div.summary-heading h5")?.text?.trim();
       const value = b.selectFirst("div.summary-content")?.text?.trim();
@@ -224,19 +254,28 @@ class DefaultExtension extends MProvider {
     }
 
     const author =
+      extra["المؤلف"] ||
       extra["مؤلف"] ||
       extra["الكاتب"] ||
       doc.selectFirst("div.author-content a")?.text?.trim() ||
       "";
 
+    // On this site the "artist" taxonomy holds the translator.
     const artist =
-      extra["الرسام"] || doc.selectFirst("div.artist-content a")?.text?.trim() || "";
+      extra["المترجم"] ||
+      extra["الرسام"] ||
+      doc.selectFirst("div.artist-content a")?.text?.trim() ||
+      "";
 
     const statusText =
-      extra["الحالة"] || doc.selectFirst("div.post-status div.summary-content")?.text?.trim() || "";
+      doc.selectFirst("div.nhv-novel-status strong")?.text?.trim() ||
+      extra["الحالة"] ||
+      doc.selectFirst("div.post-status div.summary-content")?.text?.trim() ||
+      "";
     const status = this.toStatus(statusText);
 
-    let genre = doc.select("div.genres-content a").map((el) => el.text.trim());
+    let genre = doc.select("div.nhv-novel-genres a").map((el) => el.text.trim());
+    if (!genre.length) genre = doc.select("div.genres-content a").map((el) => el.text.trim());
     if (!genre.length && extra["التصنيفات"]) {
       genre = extra["التصنيفات"]
         .split(",")

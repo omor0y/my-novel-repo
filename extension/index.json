@@ -1,6 +1,6 @@
 [
   {
-    "name": "Riwyat Novel",
+    "name": "فضاء الروايات",
     "id": 756554099,
     "baseUrl": "https://cenele.com",
     "lang": "ar",
@@ -10,9 +10,9 @@
     "dateFormatLocale": "",
     "isNsfw": false,
     "hasCloudflare": false,
-    "sourceCodeUrl": "https://raw.githubusercontent.com/omar9319/my-novel-repo/main/extension/source.js",
+    "sourceCodeUrl": "https://raw.githubusercontent.com/omor0y/my-novel-repo/main/extension/source.js",
     "apiUrl": "",
-    "version": "1.0.17",
+    "version": "1.1.0",
     "isManga": false,
     "itemType": 2,
     "isFullData": false,
