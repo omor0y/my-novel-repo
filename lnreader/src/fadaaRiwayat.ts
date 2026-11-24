@@ -15,7 +15,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   name = 'فضاء الروايات';
   icon = 'src/ar/fadaariwayat/icon.png';
   site = 'https://cenele.com/';
-  version = '1.0.8';
+  version = '1.0.9';
 
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: { Referer: 'https://cenele.com/' },
@@ -365,7 +365,15 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   // through again.
   private quickWaits = [2000, 4000, 8000];
   private gateWaits = [15000, 30000, 60000, 120000];
-  private gateMessage = 'الموقع طلب تحقق «لست روبوت» بدل الفصل';
+  // "Cloudflare" in the message is what Bunori looks for to pause the source's
+  // downloads and offer its own verification screen (the check is Cloudflare
+  // Turnstile).
+  private gateMessage = 'Cloudflare: الموقع طلب تحقق «لست روبوت». افتح التحقق من شاشة التحميل';
+
+  // Bunori pauses downloads and lets the reader pass the check himself, so
+  // there the plugin reports the check at once instead of waiting it out.
+  private inBunori =
+    typeof globalThis !== 'undefined' && !!(globalThis as any).__bunori_bridge;
   private holdingBack = false;
 
   // Apps may ask for several chapters at once (Bunori downloads three in
@@ -394,7 +402,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
       } catch (e) {
         const isGate = e instanceof Error && e.message === this.gateMessage;
         if (isGate) {
-          if (this.holdingBack || gate >= this.gateWaits.length) {
+          if (this.inBunori || this.holdingBack || gate >= this.gateWaits.length) {
             this.holdingBack = true;
             throw e;
           }

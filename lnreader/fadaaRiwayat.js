@@ -56,7 +56,7 @@ var FadaaRiwayatPlugin = (function () {
         this.name = 'فضاء الروايات';
         this.icon = 'src/ar/fadaariwayat/icon.png';
         this.site = 'https://cenele.com/';
-        this.version = '1.0.8';
+        this.version = '1.0.9';
         this.imageRequestInit = {
             headers: { Referer: 'https://cenele.com/' },
         };
@@ -64,7 +64,8 @@ var FadaaRiwayatPlugin = (function () {
         this.paragraphStyle = 'margin: 0 0 0.9em 0; text-indent: 0;';
         this.quickWaits = [2000, 4000, 8000];
         this.gateWaits = [15000, 30000, 60000, 120000];
-        this.gateMessage = 'الموقع طلب تحقق «لست روبوت» بدل الفصل';
+        this.gateMessage = 'Cloudflare: الموقع طلب تحقق «لست روبوت». افتح التحقق من شاشة التحميل';
+        this.inBunori = typeof globalThis !== 'undefined' && !!globalThis.__bunori_bridge;
         this.holdingBack = false;
         this.chapterQueue = Promise.resolve();
         this.minGapMs = 2000;
@@ -497,7 +498,7 @@ var FadaaRiwayatPlugin = (function () {
                         e_3 = _a.sent();
                         isGate = e_3 instanceof Error && e_3.message === this.gateMessage;
                         if (!isGate) return [3, 5];
-                        if (this.holdingBack || gate >= this.gateWaits.length) {
+                        if (this.inBunori || this.holdingBack || gate >= this.gateWaits.length) {
                             this.holdingBack = true;
                             throw e_3;
                         }
