@@ -56,7 +56,7 @@ var FadaaRiwayatPlugin = (function () {
         this.name = 'فضاء الروايات';
         this.icon = 'src/ar/fadaariwayat/icon.png';
         this.site = 'https://cenele.com/';
-        this.version = '1.0.10';
+        this.version = '1.0.11';
         this.imageRequestInit = {
             headers: { Referer: 'https://cenele.com/' },
         };
@@ -67,9 +67,10 @@ var FadaaRiwayatPlugin = (function () {
         this.gateMessage = 'Cloudflare: الموقع طلب تحقق «لست روبوت». افتح التحقق من شاشة التحميل';
         this.inBunori = typeof globalThis !== 'undefined' && !!globalThis.__bunori_bridge;
         this.holdingBack = false;
-        this.chapterQueue = Promise.resolve();
-        this.minGapMs = 0;
-        this.lastRequestAt = 0;
+        this.maxParallel = 3;
+        this.active = 0;
+        this.waiting = [];
+        this.pauseUntil = 0;
     }
     FadaaRiwayatPlugin.prototype.getHtml = function (url) {
         return __awaiter(this, void 0, Promise, function () {
@@ -548,11 +549,40 @@ var FadaaRiwayatPlugin = (function () {
             });
         });
     };
-    FadaaRiwayatPlugin.prototype.parseChapter = function (chapterPath) {
+    FadaaRiwayatPlugin.prototype.acquire = function () {
         var _this = this;
-        var run = this.chapterQueue.then(function () { return _this.fetchChapter(chapterPath); });
-        this.chapterQueue = run.catch(function () { return undefined; });
-        return run;
+        if (this.active < this.maxParallel) {
+            this.active++;
+            return Promise.resolve();
+        }
+        return new Promise(function (resolve) { return _this.waiting.push(resolve); });
+    };
+    FadaaRiwayatPlugin.prototype.release = function () {
+        var next = this.waiting.shift();
+        if (next)
+            next();
+        else
+            this.active--;
+    };
+    FadaaRiwayatPlugin.prototype.parseChapter = function (chapterPath) {
+        return __awaiter(this, void 0, Promise, function () {
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0: return [4, this.acquire()];
+                    case 1:
+                        _a.sent();
+                        _a.label = 2;
+                    case 2:
+                        _a.trys.push([2, , 4, 5]);
+                        return [4, this.fetchChapter(chapterPath)];
+                    case 3: return [2, _a.sent()];
+                    case 4:
+                        this.release();
+                        return [7];
+                    case 5: return [2];
+                }
+            });
+        });
     };
     FadaaRiwayatPlugin.prototype.fetchChapter = function (chapterPath) {
         return __awaiter(this, void 0, Promise, function () {
@@ -564,7 +594,7 @@ var FadaaRiwayatPlugin = (function () {
                         gate = 0;
                         _a.label = 1;
                     case 1:
-                        _a.trys.push([1, 3, , 8]);
+                        _a.trys.push([1, 3, , 7]);
                         return [4, this.readChapter(chapterPath)];
                     case 2:
                         html = _a.sent();
@@ -573,25 +603,23 @@ var FadaaRiwayatPlugin = (function () {
                     case 3:
                         e_3 = _a.sent();
                         isGate = e_3 instanceof Error && e_3.message === this.gateMessage;
-                        if (!isGate) return [3, 5];
+                        if (!isGate) return [3, 4];
                         if (this.inBunori || this.holdingBack || gate >= this.gateWaits.length) {
                             this.holdingBack = true;
                             throw e_3;
                         }
-                        return [4, this.sleep(this.gateWaits[gate++])];
+                        this.pauseUntil = Math.max(this.pauseUntil, Date.now() + this.gateWaits[gate++]);
+                        return [3, 6];
                     case 4:
-                        _a.sent();
-                        return [3, 7];
-                    case 5:
                         if (quick >= this.quickWaits.length)
                             throw e_3;
                         return [4, this.sleep(this.quickWaits[quick++])];
-                    case 6:
+                    case 5:
                         _a.sent();
-                        _a.label = 7;
-                    case 7: return [3, 8];
-                    case 8: return [3, 1];
-                    case 9: return [2];
+                        _a.label = 6;
+                    case 6: return [3, 7];
+                    case 7: return [3, 1];
+                    case 8: return [2];
                 }
             });
         });
@@ -603,15 +631,13 @@ var FadaaRiwayatPlugin = (function () {
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
-                        wait = this.lastRequestAt + this.minGapMs - Date.now();
+                        wait = this.pauseUntil - Date.now();
                         if (!(wait > 0)) return [3, 2];
                         return [4, this.sleep(wait)];
                     case 1:
                         _a.sent();
                         _a.label = 2;
-                    case 2:
-                        this.lastRequestAt = Date.now();
-                        return [4, this.getPage(this.site + chapterPath)];
+                    case 2: return [4, this.getPage(this.site + chapterPath)];
                     case 3:
                         $ = _a.sent();
                         if ($('.nhv-ts-gate').length) {

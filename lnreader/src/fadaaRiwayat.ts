@@ -15,7 +15,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   name = 'فضاء الروايات';
   icon = 'src/ar/fadaariwayat/icon.png';
   site = 'https://cenele.com/';
-  version = '1.0.10';
+  version = '1.0.11';
 
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: { Referer: 'https://cenele.com/' },
@@ -432,17 +432,35 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   private holdingBack = false;
 
   // Apps may ask for several chapters at once (Bunori downloads three in
-  // parallel). Chapters are fetched one at a time, back to back (the same pace
-  // IReader's own Riwyat source uses), and a wait for the "not a robot" check
-  // holds the whole queue instead of every chapter hitting the site at once.
-  private chapterQueue: Promise<unknown> = Promise.resolve();
-  private minGapMs = 0;
-  private lastRequestAt = 0;
+  // parallel). Up to three chapters are fetched at the same time. When the site
+  // asks for its "not a robot" check, every chapter waits together (pauseUntil)
+  // instead of each one hitting the site again.
+  private maxParallel = 3;
+  private active = 0;
+  private waiting: (() => void)[] = [];
+  private pauseUntil = 0;
 
-  parseChapter(chapterPath: string): Promise<string> {
-    const run = this.chapterQueue.then(() => this.fetchChapter(chapterPath));
-    this.chapterQueue = run.catch(() => undefined);
-    return run;
+  private acquire(): Promise<void> {
+    if (this.active < this.maxParallel) {
+      this.active++;
+      return Promise.resolve();
+    }
+    return new Promise(resolve => this.waiting.push(resolve));
+  }
+
+  private release(): void {
+    const next = this.waiting.shift();
+    if (next) next();
+    else this.active--;
+  }
+
+  async parseChapter(chapterPath: string): Promise<string> {
+    await this.acquire();
+    try {
+      return await this.fetchChapter(chapterPath);
+    } finally {
+      this.release();
+    }
   }
 
   private async fetchChapter(chapterPath: string): Promise<string> {
@@ -460,7 +478,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
             this.holdingBack = true;
             throw e;
           }
-          await this.sleep(this.gateWaits[gate++]);
+          this.pauseUntil = Math.max(this.pauseUntil, Date.now() + this.gateWaits[gate++]);
         } else {
           if (quick >= this.quickWaits.length) throw e;
           await this.sleep(this.quickWaits[quick++]);
@@ -470,9 +488,8 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   }
 
   private async readChapter(chapterPath: string): Promise<string> {
-    const wait = this.lastRequestAt + this.minGapMs - Date.now();
+    const wait = this.pauseUntil - Date.now();
     if (wait > 0) await this.sleep(wait);
-    this.lastRequestAt = Date.now();
     const $ = await this.getPage(this.site + chapterPath);
     if ($('.nhv-ts-gate').length) {
       // The site sent its "not a robot" check instead of the chapter. Fail the
