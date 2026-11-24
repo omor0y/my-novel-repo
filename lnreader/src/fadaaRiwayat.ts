@@ -15,7 +15,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   name = 'فضاء الروايات';
   icon = 'src/ar/fadaariwayat/icon.png';
   site = 'https://cenele.com/';
-  version = '1.0.5';
+  version = '1.0.6';
 
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: { Referer: 'https://cenele.com/' },
@@ -358,7 +358,33 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   // after every paragraph, no first-line indent.
   private paragraphStyle = 'margin: 0 0 0.9em 0; text-indent: 0;';
 
+  // When the site pushes back (its "not a robot" check, a reply without the
+  // text, or a refused request), wait and try the same chapter again instead of
+  // failing it, so nobody has to re-queue chapters by hand. Downloads run at
+  // normal speed until then. If a chapter still fails after every wait, the
+  // site is holding the check open, so the following chapters fail fast
+  // (one try each) until one comes through again.
+  private retryWaits = [15000, 30000, 60000, 120000];
+  private holdingBack = false;
+
   async parseChapter(chapterPath: string): Promise<string> {
+    const waits = this.holdingBack ? [] : this.retryWaits;
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= waits.length; attempt++) {
+      if (attempt > 0) await this.sleep(waits[attempt - 1]);
+      try {
+        const html = await this.readChapter(chapterPath);
+        this.holdingBack = false;
+        return html;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    this.holdingBack = true;
+    throw lastError;
+  }
+
+  private async readChapter(chapterPath: string): Promise<string> {
     const $ = await this.getPage(this.site + chapterPath);
     if ($('.nhv-ts-gate').length) {
       // The site sent its "not a robot" check instead of the chapter. Fail the
@@ -396,7 +422,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
     if (!paragraphs.length) {
       // No chapter text in the reply (error page, interrupted load, ...). Fail
       // the download so LNReader doesn't save an empty chapter; a retry usually works.
-      throw new Error('ما وصل نص الفصل من الموقع، حمّله مرة ثانية');
+      throw new Error('ما وصل نص الفصل من الموقع، جرب تحمّله مرة ثانية بعد شوي');
     }
 
     const heading = title

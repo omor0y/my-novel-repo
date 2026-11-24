@@ -56,15 +56,17 @@ var FadaaRiwayatPlugin = (function () {
         this.name = 'فضاء الروايات';
         this.icon = 'src/ar/fadaariwayat/icon.png';
         this.site = 'https://cenele.com/';
-        this.version = '1.0.5';
+        this.version = '1.0.6';
         this.imageRequestInit = {
             headers: { Referer: 'https://cenele.com/' },
         };
         this.userAgent = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
         this.paragraphStyle = 'margin: 0 0 0.9em 0; text-indent: 0;';
+        this.retryWaits = [15000, 30000, 60000, 120000];
+        this.holdingBack = false;
     }
     FadaaRiwayatPlugin.prototype.getHtml = function (url) {
-        return __awaiter(this, void 0, void 0, function () {
+        return __awaiter(this, void 0, Promise, function () {
             var res;
             return __generator(this, function (_a) {
                 switch (_a.label) {
@@ -80,7 +82,7 @@ var FadaaRiwayatPlugin = (function () {
         });
     };
     FadaaRiwayatPlugin.prototype.getPage = function (url) {
-        return __awaiter(this, void 0, void 0, function () {
+        return __awaiter(this, void 0, Promise, function () {
             var _a;
             return __generator(this, function (_b) {
                 switch (_b.label) {
@@ -133,7 +135,7 @@ var FadaaRiwayatPlugin = (function () {
         return novels;
     };
     FadaaRiwayatPlugin.prototype.popularNovels = function (pageNo_1, _a) {
-        return __awaiter(this, arguments, void 0, function (pageNo, _b) {
+        return __awaiter(this, arguments, Promise, function (pageNo, _b) {
             var order, page, $;
             var showLatestNovels = _b.showLatestNovels;
             return __generator(this, function (_c) {
@@ -150,7 +152,7 @@ var FadaaRiwayatPlugin = (function () {
         });
     };
     FadaaRiwayatPlugin.prototype.searchNovels = function (searchTerm, pageNo) {
-        return __awaiter(this, void 0, void 0, function () {
+        return __awaiter(this, void 0, Promise, function () {
             var url, $;
             return __generator(this, function (_a) {
                 switch (_a.label) {
@@ -177,7 +179,7 @@ var FadaaRiwayatPlugin = (function () {
         return novelStatus_1.NovelStatus.Unknown;
     };
     FadaaRiwayatPlugin.prototype.parseNovel = function (novelPath) {
-        return __awaiter(this, void 0, void 0, function () {
+        return __awaiter(this, void 0, Promise, function () {
             var novelUrl, html, $, novel, img, summary, meta, latest, result;
             return __generator(this, function (_a) {
                 switch (_a.label) {
@@ -281,7 +283,7 @@ var FadaaRiwayatPlugin = (function () {
         return null;
     };
     FadaaRiwayatPlugin.prototype.fetchAllChapters = function (pageHtml, novelUrl) {
-        return __awaiter(this, void 0, void 0, function () {
+        return __awaiter(this, void 0, Promise, function () {
             var chapters, step, postId, nonce, ajaxUrl, result, e_1;
             return __generator(this, function (_a) {
                 switch (_a.label) {
@@ -314,7 +316,7 @@ var FadaaRiwayatPlugin = (function () {
         return new Promise(function (resolve) { return setTimeout(resolve, ms); });
     };
     FadaaRiwayatPlugin.prototype.loadVolumes = function (postId, initialNonce, ajaxUrl, novelUrl, chapters, setStep) {
-        return __awaiter(this, void 0, void 0, function () {
+        return __awaiter(this, void 0, Promise, function () {
             var nonce, headers, encode, postOnce, describe, refreshNonce, post, base, meta, volumes, _i, volumes_1, vol, volume, page, more, data, $, items, _a, items_1, ch;
             var _this = this;
             return __generator(this, function (_b) {
@@ -334,7 +336,7 @@ var FadaaRiwayatPlugin = (function () {
                                 .map(function (k) { return "".concat(encodeURIComponent(k), "=").concat(encodeURIComponent(String(obj[k]))); })
                                 .join('&');
                         };
-                        postOnce = function (body) { return __awaiter(_this, void 0, void 0, function () {
+                        postOnce = function (body) { return __awaiter(_this, void 0, Promise, function () {
                             var res, text;
                             return __generator(this, function (_a) {
                                 switch (_a.label) {
@@ -371,7 +373,7 @@ var FadaaRiwayatPlugin = (function () {
                                 }
                             });
                         }); };
-                        post = function (params) { return __awaiter(_this, void 0, void 0, function () {
+                        post = function (params) { return __awaiter(_this, void 0, Promise, function () {
                             var last, attempt, r, e_2;
                             var _a, _b;
                             return __generator(this, function (_c) {
@@ -465,7 +467,44 @@ var FadaaRiwayatPlugin = (function () {
         });
     };
     FadaaRiwayatPlugin.prototype.parseChapter = function (chapterPath) {
-        return __awaiter(this, void 0, void 0, function () {
+        return __awaiter(this, void 0, Promise, function () {
+            var waits, lastError, attempt, html, e_3;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        waits = this.holdingBack ? [] : this.retryWaits;
+                        attempt = 0;
+                        _a.label = 1;
+                    case 1:
+                        if (!(attempt <= waits.length)) return [3, 7];
+                        if (!(attempt > 0)) return [3, 3];
+                        return [4, this.sleep(waits[attempt - 1])];
+                    case 2:
+                        _a.sent();
+                        _a.label = 3;
+                    case 3:
+                        _a.trys.push([3, 5, , 6]);
+                        return [4, this.readChapter(chapterPath)];
+                    case 4:
+                        html = _a.sent();
+                        this.holdingBack = false;
+                        return [2, html];
+                    case 5:
+                        e_3 = _a.sent();
+                        lastError = e_3;
+                        return [3, 6];
+                    case 6:
+                        attempt++;
+                        return [3, 1];
+                    case 7:
+                        this.holdingBack = true;
+                        throw lastError;
+                }
+            });
+        });
+    };
+    FadaaRiwayatPlugin.prototype.readChapter = function (chapterPath) {
+        return __awaiter(this, void 0, Promise, function () {
             var $, title, reading, escape, paragraphs, heading;
             var _this = this;
             return __generator(this, function (_a) {
@@ -503,7 +542,7 @@ var FadaaRiwayatPlugin = (function () {
                             }
                         });
                         if (!paragraphs.length) {
-                            throw new Error('ما وصل نص الفصل من الموقع، حمّله مرة ثانية');
+                            throw new Error('ما وصل نص الفصل من الموقع، جرب تحمّله مرة ثانية بعد شوي');
                         }
                         heading = title
                             ? "<h2 style=\"margin: 0 0 1.2em 0;\">".concat(escape(title), "</h2>\n")
