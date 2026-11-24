@@ -15,7 +15,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   name = 'فضاء الروايات';
   icon = 'src/ar/fadaariwayat/icon.png';
   site = 'https://cenele.com/';
-  version = '1.0.6';
+  version = '1.0.7';
 
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: { Referer: 'https://cenele.com/' },
@@ -358,30 +358,38 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   // after every paragraph, no first-line indent.
   private paragraphStyle = 'margin: 0 0 0.9em 0; text-indent: 0;';
 
-  // When the site pushes back (its "not a robot" check, a reply without the
-  // text, or a refused request), wait and try the same chapter again instead of
-  // failing it, so nobody has to re-queue chapters by hand. Downloads run at
-  // normal speed until then. If a chapter still fails after every wait, the
-  // site is holding the check open, so the following chapters fail fast
-  // (one try each) until one comes through again.
-  private retryWaits = [15000, 30000, 60000, 120000];
+  // A reply without the chapter text or a failed request is a site glitch:
+  // retry the same chapter after a few seconds. Only the site's "not a robot"
+  // check gets the long waits. If a chapter still meets the check after every
+  // wait, the following chapters fail fast (one try each) until one comes
+  // through again.
+  private quickWaits = [2000, 4000, 8000];
+  private gateWaits = [15000, 30000, 60000, 120000];
+  private gateMessage = 'الموقع طلب تحقق «لست روبوت» بدل الفصل';
   private holdingBack = false;
 
   async parseChapter(chapterPath: string): Promise<string> {
-    const waits = this.holdingBack ? [] : this.retryWaits;
-    let lastError: unknown;
-    for (let attempt = 0; attempt <= waits.length; attempt++) {
-      if (attempt > 0) await this.sleep(waits[attempt - 1]);
+    let quick = 0;
+    let gate = 0;
+    for (;;) {
       try {
         const html = await this.readChapter(chapterPath);
         this.holdingBack = false;
         return html;
       } catch (e) {
-        lastError = e;
+        const isGate = e instanceof Error && e.message === this.gateMessage;
+        if (isGate) {
+          if (this.holdingBack || gate >= this.gateWaits.length) {
+            this.holdingBack = true;
+            throw e;
+          }
+          await this.sleep(this.gateWaits[gate++]);
+        } else {
+          if (quick >= this.quickWaits.length) throw e;
+          await this.sleep(this.quickWaits[quick++]);
+        }
       }
     }
-    this.holdingBack = true;
-    throw lastError;
   }
 
   private async readChapter(chapterPath: string): Promise<string> {
@@ -389,7 +397,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
     if ($('.nhv-ts-gate').length) {
       // The site sent its "not a robot" check instead of the chapter. Fail the
       // download (so no empty chapter is saved); this source doesn't get around it.
-      throw new Error('الموقع طلب تحقق «لست روبوت» بدل الفصل');
+      throw new Error(this.gateMessage);
     }
     const title = $('h3.chapter-name').first().text().replace(/\s+/g, ' ').trim();
     const reading = $('div.reading-content').first();
