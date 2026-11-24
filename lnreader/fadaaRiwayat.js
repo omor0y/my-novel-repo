@@ -56,7 +56,7 @@ var FadaaRiwayatPlugin = (function () {
         this.name = 'فضاء الروايات';
         this.icon = 'src/ar/fadaariwayat/icon.png';
         this.site = 'https://cenele.com/';
-        this.version = '1.0.9';
+        this.version = '1.0.10';
         this.imageRequestInit = {
             headers: { Referer: 'https://cenele.com/' },
         };
@@ -68,7 +68,7 @@ var FadaaRiwayatPlugin = (function () {
         this.inBunori = typeof globalThis !== 'undefined' && !!globalThis.__bunori_bridge;
         this.holdingBack = false;
         this.chapterQueue = Promise.resolve();
-        this.minGapMs = 2000;
+        this.minGapMs = 0;
         this.lastRequestAt = 0;
     }
     FadaaRiwayatPlugin.prototype.getHtml = function (url) {
@@ -323,10 +323,10 @@ var FadaaRiwayatPlugin = (function () {
     };
     FadaaRiwayatPlugin.prototype.loadVolumes = function (postId, initialNonce, ajaxUrl, novelUrl, chapters, setStep) {
         return __awaiter(this, void 0, Promise, function () {
-            var nonce, headers, encode, postOnce, describe, refreshNonce, post, base, meta, volumes, _i, volumes_1, vol, volume, page, more, data, $, items, _a, items_1, ch;
+            var nonce, headers, encode, postOnce, describe, refreshNonce, post, base, fast, _i, fast_1, ch, meta, volumes, _a, volumes_1, vol, volume, page, more, data, $, items, _b, items_1, ch;
             var _this = this;
-            return __generator(this, function (_b) {
-                switch (_b.label) {
+            return __generator(this, function (_c) {
+                switch (_c.label) {
                     case 0:
                         nonce = initialNonce || '';
                         headers = {
@@ -430,44 +430,120 @@ var FadaaRiwayatPlugin = (function () {
                         setStep('جلب رمز الطلب');
                         return [4, refreshNonce()];
                     case 1:
-                        _b.sent();
-                        _b.label = 2;
-                    case 2:
+                        _c.sent();
+                        _c.label = 2;
+                    case 2: return [4, this.loadAllAtOnce(post, base, setStep)];
+                    case 3:
+                        fast = _c.sent();
+                        if (fast) {
+                            for (_i = 0, fast_1 = fast; _i < fast_1.length; _i++) {
+                                ch = fast_1[_i];
+                                chapters.push(ch);
+                            }
+                            return [2, undefined];
+                        }
                         setStep('قائمة المجلدات');
                         return [4, post(__assign(__assign({}, base), { volume: -1, page: 1, meta_only: 1 }))];
-                    case 3:
-                        meta = _b.sent();
+                    case 4:
+                        meta = _c.sent();
                         volumes = Array.isArray(meta.volumes) ? meta.volumes : [];
                         if (!volumes.length)
                             return [2, 'الموقع رجّع قائمة مجلدات فاضية'];
-                        _i = 0, volumes_1 = volumes;
-                        _b.label = 4;
-                    case 4:
-                        if (!(_i < volumes_1.length)) return [3, 8];
-                        vol = volumes_1[_i];
+                        _a = 0, volumes_1 = volumes;
+                        _c.label = 5;
+                    case 5:
+                        if (!(_a < volumes_1.length)) return [3, 9];
+                        vol = volumes_1[_a];
                         volume = parseInt(String(vol.num || 0), 10);
                         page = 1;
                         more = true;
-                        _b.label = 5;
-                    case 5:
-                        if (!(more && page <= 200)) return [3, 7];
+                        _c.label = 6;
+                    case 6:
+                        if (!(more && page <= 200)) return [3, 8];
                         setStep("".concat(vol.label || "\u0627\u0644\u0645\u062C\u0644\u062F ".concat(volume), "\u060C \u0627\u0644\u0635\u0641\u062D\u0629 ").concat(page));
                         return [4, post(__assign(__assign({}, base), { volume: volume, page: page }))];
-                    case 6:
-                        data = _b.sent();
+                    case 7:
+                        data = _c.sent();
                         $ = (0, cheerio_1.load)(data.html || '');
                         items = this.parseChapterItems($, $('li.wp-manga-chapter'));
-                        for (_a = 0, items_1 = items; _a < items_1.length; _a++) {
-                            ch = items_1[_a];
+                        for (_b = 0, items_1 = items; _b < items_1.length; _b++) {
+                            ch = items_1[_b];
                             chapters.push(ch);
                         }
                         more = !!data.has_more && items.length > 0;
                         page++;
+                        return [3, 6];
+                    case 8:
+                        _a++;
                         return [3, 5];
+                    case 9: return [2, undefined];
+                }
+            });
+        });
+    };
+    FadaaRiwayatPlugin.prototype.loadAllAtOnce = function (post, base, setStep) {
+        return __awaiter(this, void 0, Promise, function () {
+            var perPage, parallel, parse, first, total, pages, lastPage, start, batch, page, got, _i, got_1, list, all, seen, _a, pages_1, list, _b, list_1, ch, _c;
+            var _this = this;
+            return __generator(this, function (_d) {
+                switch (_d.label) {
+                    case 0:
+                        perPage = 100;
+                        parallel = 4;
+                        _d.label = 1;
+                    case 1:
+                        _d.trys.push([1, 7, , 8]);
+                        parse = function (data) {
+                            var $ = (0, cheerio_1.load)(data.html || '');
+                            return _this.parseChapterItems($, $('li.wp-manga-chapter'));
+                        };
+                        setStep('قائمة الفصول، الصفحة 1');
+                        return [4, post(__assign(__assign({}, base), { volume: -1, page: 1, per_page: perPage }))];
+                    case 2:
+                        first = _d.sent();
+                        total = parseInt(String(first.total || 0), 10);
+                        pages = [parse(first)];
+                        if (!total || !pages[0].length)
+                            return [2, undefined];
+                        lastPage = Math.ceil(total / perPage);
+                        start = 2;
+                        _d.label = 3;
+                    case 3:
+                        if (!(start <= lastPage)) return [3, 6];
+                        batch = [];
+                        for (page = start; page < start + parallel && page <= lastPage; page++) {
+                            batch.push(post(__assign(__assign({}, base), { volume: -1, page: page, per_page: perPage })).then(parse));
+                        }
+                        setStep("\u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0641\u0635\u0648\u0644\u060C \u0627\u0644\u0635\u0641\u062D\u0629 ".concat(start, " \u0645\u0646 ").concat(lastPage));
+                        return [4, Promise.all(batch)];
+                    case 4:
+                        got = _d.sent();
+                        for (_i = 0, got_1 = got; _i < got_1.length; _i++) {
+                            list = got_1[_i];
+                            pages.push(list);
+                        }
+                        _d.label = 5;
+                    case 5:
+                        start += parallel;
+                        return [3, 3];
+                    case 6:
+                        all = [];
+                        seen = {};
+                        for (_a = 0, pages_1 = pages; _a < pages_1.length; _a++) {
+                            list = pages_1[_a];
+                            for (_b = 0, list_1 = list; _b < list_1.length; _b++) {
+                                ch = list_1[_b];
+                                if (seen[ch.path])
+                                    continue;
+                                seen[ch.path] = true;
+                                all.push(ch);
+                            }
+                        }
+                        return [2, all.length >= total ? all : undefined];
                     case 7:
-                        _i++;
-                        return [3, 4];
-                    case 8: return [2, undefined];
+                        _c = _d.sent();
+                        return [2, undefined];
+                    case 8: return [2];
                 }
             });
         });

@@ -7,7 +7,7 @@ import { NovelStatus } from '@libs/novelStatus';
  * فضاء الروايات (cenele.com)
  *
  * The chapter list is loaded the same way the site's "قائمة الفصول" panel does:
- * the volume list first, then each volume in pages of 50 ("تحميل المزيد").
+ * all volumes at once in pages of 100 (falls back to volume by volume).
  * Chapter text is wrapped in dir="rtl" so exported EPUBs read right-to-left.
  */
 class FadaaRiwayatPlugin implements Plugin.PluginBase {
@@ -15,7 +15,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   name = 'فضاء الروايات';
   icon = 'src/ar/fadaariwayat/icon.png';
   site = 'https://cenele.com/';
-  version = '1.0.9';
+  version = '1.0.10';
 
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: { Referer: 'https://cenele.com/' },
@@ -330,6 +330,14 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
       await refreshNonce();
     }
 
+    // Fast path: every volume at once (volume=-1), 100 chapters a page, a few
+    // pages at a time. 3259 chapters take 33 requests instead of ~66 in a row.
+    const fast = await this.loadAllAtOnce(post, base, setStep);
+    if (fast) {
+      for (const ch of fast) chapters.push(ch);
+      return undefined;
+    }
+
     setStep('قائمة المجلدات');
     const meta = await post({ ...base, volume: -1, page: 1, meta_only: 1 });
     const volumes: { num: number; label?: string }[] = Array.isArray(meta.volumes) ? meta.volumes : [];
@@ -350,6 +358,53 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
       }
     }
     return undefined;
+  }
+
+  // All volumes in one listing. Returns undefined (so the caller falls back to
+  // reading volume by volume) if anything fails or the count doesn't match the
+  // site's total.
+  private async loadAllAtOnce(
+    post: (params: Record<string, string | number>) => Promise<any>,
+    base: Record<string, string | number>,
+    setStep: (s: string) => void,
+  ): Promise<Plugin.ChapterItem[] | undefined> {
+    const perPage = 100;
+    const parallel = 4;
+    try {
+      const parse = (data: any) => {
+        const $ = loadCheerio(data.html || '');
+        return this.parseChapterItems($, $('li.wp-manga-chapter'));
+      };
+      setStep('قائمة الفصول، الصفحة 1');
+      const first = await post({ ...base, volume: -1, page: 1, per_page: perPage });
+      const total = parseInt(String(first.total || 0), 10);
+      const pages: Plugin.ChapterItem[][] = [parse(first)];
+      if (!total || !pages[0].length) return undefined;
+
+      const lastPage = Math.ceil(total / perPage);
+      for (let start = 2; start <= lastPage; start += parallel) {
+        const batch: Promise<Plugin.ChapterItem[]>[] = [];
+        for (let page = start; page < start + parallel && page <= lastPage; page++) {
+          batch.push(post({ ...base, volume: -1, page, per_page: perPage }).then(parse));
+        }
+        setStep(`قائمة الفصول، الصفحة ${start} من ${lastPage}`);
+        const got = await Promise.all(batch);
+        for (const list of got) pages.push(list);
+      }
+
+      const all: Plugin.ChapterItem[] = [];
+      const seen: Record<string, boolean> = {};
+      for (const list of pages) {
+        for (const ch of list) {
+          if (seen[ch.path]) continue;
+          seen[ch.path] = true;
+          all.push(ch);
+        }
+      }
+      return all.length >= total ? all : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   // ---------- chapter ----------
@@ -377,12 +432,11 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   private holdingBack = false;
 
   // Apps may ask for several chapters at once (Bunori downloads three in
-  // parallel). The site only tolerates a gentle pace, so chapters are fetched
-  // one at a time and at least two seconds apart, and a wait for the "not a
-  // robot" check holds the whole queue instead of every chapter hitting the
-  // site at the same time.
+  // parallel). Chapters are fetched one at a time, back to back (the same pace
+  // IReader's own Riwyat source uses), and a wait for the "not a robot" check
+  // holds the whole queue instead of every chapter hitting the site at once.
   private chapterQueue: Promise<unknown> = Promise.resolve();
-  private minGapMs = 2000;
+  private minGapMs = 0;
   private lastRequestAt = 0;
 
   parseChapter(chapterPath: string): Promise<string> {
