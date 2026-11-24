@@ -56,13 +56,15 @@ var FadaaRiwayatPlugin = (function () {
         this.name = 'فضاء الروايات';
         this.icon = 'src/ar/fadaariwayat/icon.png';
         this.site = 'https://cenele.com/';
-        this.version = '1.0.6';
+        this.version = '1.0.7';
         this.imageRequestInit = {
             headers: { Referer: 'https://cenele.com/' },
         };
         this.userAgent = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
         this.paragraphStyle = 'margin: 0 0 0.9em 0; text-indent: 0;';
-        this.retryWaits = [15000, 30000, 60000, 120000];
+        this.quickWaits = [2000, 4000, 8000];
+        this.gateWaits = [15000, 30000, 60000, 120000];
+        this.gateMessage = 'الموقع طلب تحقق «لست روبوت» بدل الفصل';
         this.holdingBack = false;
     }
     FadaaRiwayatPlugin.prototype.getHtml = function (url) {
@@ -468,37 +470,42 @@ var FadaaRiwayatPlugin = (function () {
     };
     FadaaRiwayatPlugin.prototype.parseChapter = function (chapterPath) {
         return __awaiter(this, void 0, Promise, function () {
-            var waits, lastError, attempt, html, e_3;
+            var quick, gate, html, e_3, isGate;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
-                        waits = this.holdingBack ? [] : this.retryWaits;
-                        attempt = 0;
+                        quick = 0;
+                        gate = 0;
                         _a.label = 1;
                     case 1:
-                        if (!(attempt <= waits.length)) return [3, 7];
-                        if (!(attempt > 0)) return [3, 3];
-                        return [4, this.sleep(waits[attempt - 1])];
-                    case 2:
-                        _a.sent();
-                        _a.label = 3;
-                    case 3:
-                        _a.trys.push([3, 5, , 6]);
+                        _a.trys.push([1, 3, , 8]);
                         return [4, this.readChapter(chapterPath)];
-                    case 4:
+                    case 2:
                         html = _a.sent();
                         this.holdingBack = false;
                         return [2, html];
-                    case 5:
+                    case 3:
                         e_3 = _a.sent();
-                        lastError = e_3;
-                        return [3, 6];
+                        isGate = e_3 instanceof Error && e_3.message === this.gateMessage;
+                        if (!isGate) return [3, 5];
+                        if (this.holdingBack || gate >= this.gateWaits.length) {
+                            this.holdingBack = true;
+                            throw e_3;
+                        }
+                        return [4, this.sleep(this.gateWaits[gate++])];
+                    case 4:
+                        _a.sent();
+                        return [3, 7];
+                    case 5:
+                        if (quick >= this.quickWaits.length)
+                            throw e_3;
+                        return [4, this.sleep(this.quickWaits[quick++])];
                     case 6:
-                        attempt++;
-                        return [3, 1];
-                    case 7:
-                        this.holdingBack = true;
-                        throw lastError;
+                        _a.sent();
+                        _a.label = 7;
+                    case 7: return [3, 8];
+                    case 8: return [3, 1];
+                    case 9: return [2];
                 }
             });
         });
@@ -513,7 +520,7 @@ var FadaaRiwayatPlugin = (function () {
                     case 1:
                         $ = _a.sent();
                         if ($('.nhv-ts-gate').length) {
-                            throw new Error('الموقع طلب تحقق «لست روبوت» بدل الفصل');
+                            throw new Error(this.gateMessage);
                         }
                         title = $('h3.chapter-name').first().text().replace(/\s+/g, ' ').trim();
                         reading = $('div.reading-content').first();
