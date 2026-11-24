@@ -56,7 +56,7 @@ var FadaaRiwayatPlugin = (function () {
         this.name = 'فضاء الروايات';
         this.icon = 'src/ar/fadaariwayat/icon.png';
         this.site = 'https://cenele.com/';
-        this.version = '1.0.7';
+        this.version = '1.0.8';
         this.imageRequestInit = {
             headers: { Referer: 'https://cenele.com/' },
         };
@@ -66,6 +66,9 @@ var FadaaRiwayatPlugin = (function () {
         this.gateWaits = [15000, 30000, 60000, 120000];
         this.gateMessage = 'الموقع طلب تحقق «لست روبوت» بدل الفصل';
         this.holdingBack = false;
+        this.chapterQueue = Promise.resolve();
+        this.minGapMs = 2000;
+        this.lastRequestAt = 0;
     }
     FadaaRiwayatPlugin.prototype.getHtml = function (url) {
         return __awaiter(this, void 0, Promise, function () {
@@ -469,6 +472,12 @@ var FadaaRiwayatPlugin = (function () {
         });
     };
     FadaaRiwayatPlugin.prototype.parseChapter = function (chapterPath) {
+        var _this = this;
+        var run = this.chapterQueue.then(function () { return _this.fetchChapter(chapterPath); });
+        this.chapterQueue = run.catch(function () { return undefined; });
+        return run;
+    };
+    FadaaRiwayatPlugin.prototype.fetchChapter = function (chapterPath) {
         return __awaiter(this, void 0, Promise, function () {
             var quick, gate, html, e_3, isGate;
             return __generator(this, function (_a) {
@@ -512,12 +521,21 @@ var FadaaRiwayatPlugin = (function () {
     };
     FadaaRiwayatPlugin.prototype.readChapter = function (chapterPath) {
         return __awaiter(this, void 0, Promise, function () {
-            var $, title, reading, escape, paragraphs, heading;
+            var wait, $, title, reading, escape, paragraphs, heading;
             var _this = this;
             return __generator(this, function (_a) {
                 switch (_a.label) {
-                    case 0: return [4, this.getPage(this.site + chapterPath)];
+                    case 0:
+                        wait = this.lastRequestAt + this.minGapMs - Date.now();
+                        if (!(wait > 0)) return [3, 2];
+                        return [4, this.sleep(wait)];
                     case 1:
+                        _a.sent();
+                        _a.label = 2;
+                    case 2:
+                        this.lastRequestAt = Date.now();
+                        return [4, this.getPage(this.site + chapterPath)];
+                    case 3:
                         $ = _a.sent();
                         if ($('.nhv-ts-gate').length) {
                             throw new Error(this.gateMessage);

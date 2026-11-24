@@ -15,7 +15,7 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   name = 'فضاء الروايات';
   icon = 'src/ar/fadaariwayat/icon.png';
   site = 'https://cenele.com/';
-  version = '1.0.7';
+  version = '1.0.8';
 
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: { Referer: 'https://cenele.com/' },
@@ -368,7 +368,22 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   private gateMessage = 'الموقع طلب تحقق «لست روبوت» بدل الفصل';
   private holdingBack = false;
 
-  async parseChapter(chapterPath: string): Promise<string> {
+  // Apps may ask for several chapters at once (Bunori downloads three in
+  // parallel). The site only tolerates a gentle pace, so chapters are fetched
+  // one at a time and at least two seconds apart, and a wait for the "not a
+  // robot" check holds the whole queue instead of every chapter hitting the
+  // site at the same time.
+  private chapterQueue: Promise<unknown> = Promise.resolve();
+  private minGapMs = 2000;
+  private lastRequestAt = 0;
+
+  parseChapter(chapterPath: string): Promise<string> {
+    const run = this.chapterQueue.then(() => this.fetchChapter(chapterPath));
+    this.chapterQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async fetchChapter(chapterPath: string): Promise<string> {
     let quick = 0;
     let gate = 0;
     for (;;) {
@@ -393,6 +408,9 @@ class FadaaRiwayatPlugin implements Plugin.PluginBase {
   }
 
   private async readChapter(chapterPath: string): Promise<string> {
+    const wait = this.lastRequestAt + this.minGapMs - Date.now();
+    if (wait > 0) await this.sleep(wait);
+    this.lastRequestAt = Date.now();
     const $ = await this.getPage(this.site + chapterPath);
     if ($('.nhv-ts-gate').length) {
       // The site sent its "not a robot" check instead of the chapter. Fail the
